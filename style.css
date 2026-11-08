@@ -48,9 +48,11 @@ svg.i{display:block;flex-shrink:0}
 .dow span{margin-left:8px;font-size:15px}
 @media(min-width:768px){.page-head h1{font-size:40px}.big-date{font-size:80px}.dow{font-size:24px;padding-bottom:8px}}
 .greet{margin-top:16px}
+.date-nav{margin-top:16px;margin-left:-4px}
 .mood{margin-top:20px;max-width:560px;display:flex;align-items:center;gap:12px;border:1px dashed rgba(223,166,163,.7);border-radius:999px;background:rgba(255,255,255,.6);padding:0 20px}
 .mood span{flex-shrink:0;font-family:var(--serif);font-size:14px;color:var(--rose-deep)}
 .mood input{flex:1;min-width:0;height:48px;border:0;background:transparent;outline:none}
+.mood input:disabled{opacity:.5}
 .rise{animation:rise .6s cubic-bezier(.2,.7,.2,1) both}
 @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 
@@ -90,6 +92,8 @@ svg.i{display:block;flex-shrink:0}
 .check span{display:grid;place-items:center;width:28px;height:28px;border-radius:999px;border:2px solid rgba(223,166,163,.7);background:var(--card);color:#fff;transition:background .15s}
 .check:hover span{background:var(--rose-soft)}
 .check.on span{border-color:var(--sage);background:var(--sage)}
+.check:disabled span{opacity:.45}
+.check:disabled:hover span{background:var(--card)}
 .t-body{flex:1;min-width:0;padding-top:4px}
 .t-title{word-break:break-word;line-height:1.4}
 .done .t-title{color:var(--mute);text-decoration:line-through;text-decoration-color:rgba(223,166,163,.6)}
@@ -125,6 +129,8 @@ svg.i{display:block;flex-shrink:0}
 .r-btn:hover{background:var(--sage-soft)}
 .r-btn .dot{display:grid;place-items:center;width:24px;height:24px;border-radius:999px;border:2px solid var(--sage);flex-shrink:0}
 .r-btn.on{background:var(--sage);color:#fff}
+.r-btn:disabled{opacity:.45}
+.r-btn:disabled:hover{background:var(--bg)}
 .r-btn.on .dot{border-color:#fff}
 
 .free{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
