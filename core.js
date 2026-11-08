@@ -84,6 +84,7 @@ const S = {
   mood: '', freeNew: '', memoDraft: {}, showInboxDone: false,
   weekStart: '', mlPeriod: 'week', mlAnchor: '',
   projects: [], ptasks: [], pDraft: {}, pShow: {},
+  calMonth: '', monthTasks: [], calErr: '',
   modal: null, lockMsg: ''
 };
 
