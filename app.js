@@ -28,6 +28,10 @@ const LOADERS = {
   async routine() {
     S.routinesAll = await rpc('dm_routines_all');
   },
+  async project() {
+    const [p, t] = await Promise.all([rpc('dm_projects_list'), rpc('dm_ptasks_list')]);
+    S.projects = p; S.ptasks = t;
+  },
   async inbox() {
     const [a, b] = await Promise.all([rpc('dm_tasks_inbox'), rpc('dm_tasks_upcoming', { p_date: S.today })]);
     S.inbox = a; S.upcoming = b;
@@ -66,7 +70,7 @@ async function refresh() {
 function route() {
   if (S.locked) { render(); return; }
   const h = (location.hash || '#today').slice(1);
-  S.page = ['today', 'inbox', 'routine', 'weekly', 'mylife'].includes(h) ? h : 'today';
+  S.page = ['today', 'inbox', 'project', 'routine', 'weekly', 'mylife'].includes(h) ? h : 'today';
   S.today = todayStr();
   if (!S.weekStart) S.weekStart = weekStart(S.today);
   if (!S.mlAnchor) S.mlAnchor = S.today;
@@ -79,6 +83,7 @@ function route() {
 const NAV = [
   { id: 'today', label: 'TODAY', icon: 'sun' },
   { id: 'inbox', label: 'INBOX', icon: 'inbox' },
+  { id: 'project', label: 'PROJECT', icon: 'folder' },
   { id: 'routine', label: 'ROUTINE', icon: 'repeat' },
   { id: 'weekly', label: 'WEEKLY', icon: 'cal' },
   { id: 'mylife', label: 'MY LIFE', icon: 'sprout' }
@@ -250,6 +255,68 @@ function viewInbox() {
           : `<ul class="tasks" style="margin-top:8px">${S.upcoming.map(t => taskItem(t, { moveToday: true, showDate: true })).join('')}</ul>`}
       </section>
     </div>`;
+  });
+}
+
+/* ---------- PROJECT ---------- */
+const findPT = id => S.ptasks.find(t => t.id === id);
+const patchPT = (id, obj) => { S.ptasks = S.ptasks.map(t => t.id === id ? { ...t, ...obj } : t); };
+
+function ptItem(t, kind = 'open') {
+  const done = kind === 'done';
+  return `
+  <li class="${done ? 'done' : ''}">
+    ${kind === 'sent' ? '' : `<button class="check ${t.is_completed ? 'on' : ''}" data-act="pt-toggle" data-id="${t.id}" aria-pressed="${!!t.is_completed}" aria-label="${esc(t.title)} ${t.is_completed ? '완료 취소' : '완료'}"><span>${t.is_completed ? icon('check', 16, 3) : ''}</span></button>`}
+    <div class="t-body">
+      <p class="t-title">${esc(t.title)}</p>
+      ${kind === 'sent' ? `<div class="t-meta"><span class="tiny">${fmtMD(toStr(new Date(t.sent_at)))} TODO로 보냄</span></div>` : ''}
+    </div>
+    <div class="t-acts">
+      ${kind === 'open' ? `<button class="to-today" data-act="pt-send" data-id="${t.id}">${icon('right', 14)}TODO로 보내기</button>` : ''}
+      <button class="icon-btn" data-act="pt-del" data-id="${t.id}" aria-label="${esc(t.title)} 삭제">${icon('trash', 16)}</button>
+    </div>
+  </li>`;
+}
+
+function projectCard(p) {
+  const all = S.ptasks.filter(t => t.project_id === p.id);
+  const open = all.filter(t => !t.sent_at && !t.is_completed);
+  const done = all.filter(t => !t.sent_at && t.is_completed).sort((a, b) => String(b.completed_at || '').localeCompare(String(a.completed_at || '')));
+  const sent = all.filter(t => t.sent_at).sort((a, b) => String(b.sent_at).localeCompare(String(a.sent_at)));
+  const section = (key, list, kind, label) => {
+    if (!list.length) return '';
+    const on = !!S.pShow[p.id + ':' + key];
+    return `
+      <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:4px">
+        <button class="text-btn" style="padding:0" data-act="p-show" data-id="${p.id}" data-key="${key}" aria-expanded="${on}">${on ? `${label} 접기` : `${label} ${list.length}개 보기`}</button>
+        ${on ? `<ul class="tasks pt">${list.map(t => ptItem(t, kind)).join('')}</ul>` : ''}
+      </div>`;
+  };
+  return `
+  <section class="card">
+    <div class="row-between">
+      <h2 class="lg">${esc(p.title)} ${open.length ? `<span style="color:var(--mute);font-size:16px">${open.length}</span>` : ''}</h2>
+      <div class="t-acts">
+        <button class="icon-btn" data-act="p-edit" data-id="${p.id}" aria-label="${esc(p.title)} 이름 수정">${icon('pencil', 16)}</button>
+        <button class="icon-btn" data-act="p-del" data-id="${p.id}" aria-label="${esc(p.title)} 삭제">${icon('trash', 16)}</button>
+      </div>
+    </div>
+    ${open.length ? `<ul class="tasks pt" style="margin-top:8px">${open.map(t => ptItem(t)).join('')}</ul>` : `<p class="empty" style="padding:20px 0">할 일을 아래에 적어 추가해 보세요.</p>`}
+    <div class="add-row">
+      <input id="p-add-${p.id}" class="field" maxlength="200" placeholder="이 프로젝트의 할 일 추가" value="${esc(S.pDraft[p.id] || '')}">
+      <button class="sq" data-act="pt-add" data-id="${p.id}" aria-label="할 일 추가">${icon('plus')}</button>
+    </div>
+    ${section('done', done, 'done', '완료한 일')}
+    ${section('sent', sent, 'sent', 'TODO로 보낸 일')}
+  </section>`;
+}
+
+function viewProject() {
+  const head = pageHead('Project', '큰 일을 잘게 나눠 두는 곳이에요. 준비되면 TODO로 보내요.',
+    `<button class="btn" data-act="p-new">${icon('plus')}프로젝트 추가</button>`);
+  return head + body(() => {
+    if (S.projects.length === 0) return `<section class="card"><p class="empty">아직 프로젝트가 없어요.<br>오래 걸리는 일을 프로젝트로 만들어 보세요.</p></section>`;
+    return `<div class="grid g-proj">${S.projects.map(projectCard).join('')}</div>`;
   });
 }
 
@@ -476,13 +543,14 @@ function renderModal() {
   const m = S.modal;
   if (!m) { $('#modal').innerHTML = ''; return; }
   if (m.kind === 'routine') { renderRoutineModal(); return; }
+  if (m.kind === 'project') { renderProjectModal(); return; }
   const v = m.v;
   const oc = (on) => `ochip ${on ? 'on' : ''}`;
   $('#modal').innerHTML = `
   <div class="backdrop" data-act="m-close">
-    <div class="dialog" role="dialog" aria-modal="true" aria-label="${m.mode === 'edit' ? '할 일 수정' : '새 할 일'}" data-act="noop">
+    <div class="dialog" role="dialog" aria-modal="true" aria-label="${m.mode === 'edit' ? '할 일 수정' : m.mode === 'send' ? 'TODO로 보내기' : '새 할 일'}" data-act="noop">
       <div class="row-between">
-        <h2>${m.mode === 'edit' ? '할 일 수정' : '새 할 일'}</h2>
+        <h2>${m.mode === 'edit' ? '할 일 수정' : m.mode === 'send' ? 'TODO로 보내기' : '새 할 일'}</h2>
         <button class="icon-btn" data-act="m-close" aria-label="닫기">${icon('x', 20)}</button>
       </div>
       <form class="form" data-form="task">
@@ -502,7 +570,7 @@ function renderModal() {
         <div><label class="lbl" for="m-memo">메모 (선택)</label>
           <textarea id="m-memo" class="inp" rows="3" maxlength="2000">${esc(v.memo)}</textarea></div>
         ${m.error ? `<p class="err" role="alert">${esc(m.error)}</p>` : ''}
-        <button type="submit" class="submit" ${m.saving ? 'disabled' : ''}>${m.saving ? '저장하는 중…' : m.mode === 'edit' ? '수정 저장' : (S.page === 'inbox' ? '보관하기' : '할 일 추가')}</button>
+        <button type="submit" class="submit" ${m.saving ? 'disabled' : ''}>${m.saving ? '저장하는 중…' : m.mode === 'edit' ? '수정 저장' : m.mode === 'send' ? 'TODO로 보내기' : (S.page === 'inbox' ? '보관하기' : '할 일 추가')}</button>
       </form>
     </div>
   </div>`;
@@ -511,10 +579,18 @@ function renderModal() {
 async function saveModal() {
   const m = S.modal; const v = m.v;
   if (m.kind === 'routine') return saveRoutineModal();
+  if (m.kind === 'project') return saveProjectModal();
   if (!v.title.trim()) { m.error = '할 일 제목을 입력해 주세요.'; renderModal(); return; }
   m.saving = true; m.error = ''; renderModal();
   try {
     const data = { title: v.title.trim(), category: v.category, priority: v.priority, due_date: v.due_date || null, memo: v.memo };
+    if (m.mode === 'send') {
+      const sent = await rpc('dm_ptask_send', { p_id: m.id, p_data: data });
+      closeModal();
+      toast(!sent.due_date ? 'INBOX로 보냈어요.' : sent.due_date === S.today ? '오늘 할 일로 보냈어요.' : `${fmtMD(sent.due_date)} 할 일로 보냈어요.`);
+      await refresh();
+      return;
+    }
     if (m.mode === 'edit') data.id = m.id;
     const saved = await rpc('dm_task_save', { p_data: data });
     closeModal();
@@ -526,6 +602,94 @@ async function saveModal() {
     if (!S.modal) return;
     m.saving = false; m.error = '저장하지 못했어요. ' + e.message; renderModal();
   }
+}
+
+/* ---------- 프로젝트 입력 창·동작 ---------- */
+function openProjectModal(mode, p) {
+  S.modal = { kind: 'project', mode, id: p ? p.id : null, saving: false, error: '', v: { title: p ? p.title : '' } };
+  document.body.style.overflow = 'hidden';
+  renderModal();
+  const el = $('#m-title'); if (el) el.focus();
+}
+
+function renderProjectModal() {
+  const m = S.modal, v = m.v;
+  const name = m.mode === 'edit' ? '프로젝트 이름 수정' : '새 프로젝트';
+  $('#modal').innerHTML = `
+  <div class="backdrop" data-act="m-close">
+    <div class="dialog" role="dialog" aria-modal="true" aria-label="${name}" data-act="noop">
+      <div class="row-between">
+        <h2>${name}</h2>
+        <button class="icon-btn" data-act="m-close" aria-label="닫기">${icon('x', 20)}</button>
+      </div>
+      <form class="form" data-form="project">
+        <div><label class="lbl" for="m-title">프로젝트 이름</label>
+          <input id="m-title" class="inp" maxlength="100" placeholder="예: 이사 준비, 블로그 개편" value="${esc(v.title)}"></div>
+        ${m.error ? `<p class="err" role="alert">${esc(m.error)}</p>` : ''}
+        <button type="submit" class="submit" ${m.saving ? 'disabled' : ''}>${m.saving ? '저장하는 중…' : m.mode === 'edit' ? '수정 저장' : '프로젝트 추가'}</button>
+      </form>
+    </div>
+  </div>`;
+}
+
+async function saveProjectModal() {
+  const m = S.modal, v = m.v;
+  if (!v.title.trim()) { m.error = '프로젝트 이름을 입력해 주세요.'; renderModal(); return; }
+  m.saving = true; m.error = ''; renderModal();
+  try {
+    const data = { title: v.title.trim() };
+    if (m.mode === 'edit') data.id = m.id;
+    await rpc('dm_project_save', { p_data: data });
+    closeModal();
+    toast(m.mode === 'edit' ? '수정했어요.' : '프로젝트를 만들었어요.');
+    await refresh();
+  } catch (e) {
+    if (!S.modal) return;
+    m.saving = false; m.error = '저장하지 못했어요. ' + e.message; renderModal();
+  }
+}
+
+async function deleteProject(id) {
+  const p = S.projects.find(x => x.id === id); if (!p) return;
+  const n = S.ptasks.filter(t => t.project_id === id).length;
+  if (!confirm(`'${p.title}' 프로젝트를 삭제할까요?${n ? `\n안에 있는 할 일 ${n}개(완료·보낸 기록 포함)도 함께 지워지고 되돌릴 수 없어요.\nTODO로 이미 보낸 할 일은 그대로 남아요.` : ''}`)) return;
+  const snap = { projects: S.projects, ptasks: S.ptasks };
+  S.projects = S.projects.filter(x => x.id !== id); S.ptasks = S.ptasks.filter(t => t.project_id !== id); render();
+  try { await rpc('dm_project_delete', { p_id: id }); toast('삭제했어요.'); }
+  catch (e) { Object.assign(S, snap); render(); toast('삭제하지 못했어요. ' + e.message, 'error'); }
+}
+
+async function addPTask(pid) {
+  const title = (S.pDraft[pid] || '').trim(); if (!title) return;
+  try {
+    const t = await rpc('dm_ptask_save', { p_data: { project_id: pid, title } });
+    S.ptasks = [...S.ptasks, t]; S.pDraft[pid] = ''; render();
+    const el = document.getElementById('p-add-' + pid); if (el) el.focus();
+  } catch (e) { toast('할 일을 추가하지 못했어요. ' + e.message, 'error'); }
+}
+
+async function togglePTask(id) {
+  const t = findPT(id); if (!t) return;
+  const next = !t.is_completed;
+  patchPT(id, { is_completed: next }); render();
+  try { const saved = await rpc('dm_ptask_save', { p_data: { id, is_completed: next } }); patchPT(id, saved); render(); }
+  catch (e) { patchPT(id, { is_completed: !next }); render(); toast('완료 상태를 저장하지 못했어요. ' + e.message, 'error'); }
+}
+
+async function deletePTask(id) {
+  const t = findPT(id); if (!t) return;
+  if (!confirm(`'${t.title}'을(를) 삭제할까요?`)) return;
+  const snap = S.ptasks;
+  S.ptasks = S.ptasks.filter(x => x.id !== id); render();
+  try { await rpc('dm_ptask_delete', { p_id: id }); toast('삭제했어요.'); }
+  catch (e) { S.ptasks = snap; render(); toast('삭제하지 못했어요. ' + e.message, 'error'); }
+}
+
+function openSendModal(id) {
+  const t = findPT(id); if (!t) return;
+  S.modal = { kind: 'task', mode: 'send', id, saving: false, error: '', v: { title: t.title, category: 'must', priority: 'medium', due_date: S.today, memo: '' } };
+  document.body.style.overflow = 'hidden';
+  renderModal();
 }
 
 /* ---------- 루틴 입력 창 ---------- */
@@ -725,12 +889,12 @@ function showSetup() {
 }
 
 /* ---------- 그리기 ---------- */
-const VIEWS = { today: viewToday, inbox: viewInbox, routine: viewRoutine, weekly: viewWeekly, mylife: viewMyLife };
+const VIEWS = { today: viewToday, inbox: viewInbox, project: viewProject, routine: viewRoutine, weekly: viewWeekly, mylife: viewMyLife };
 
 function render() {
   if (S.locked) { $('#app').innerHTML = viewLock(); return; }
   const active = document.activeElement;
-  const keepId = active && (active.id === 'mood' || active.id === 'free-new') ? active.id : null;
+  const keepId = active && (active.id === 'mood' || active.id === 'free-new' || (active.id || '').startsWith('p-add-')) ? active.id : null;
   $('#app').innerHTML = `<div class="shell">${viewSide()}<main class="main"><div class="wrap">${VIEWS[S.page]()}</div></main>${viewBottomNav()}</div>`;
   if (keepId) { const el = document.getElementById(keepId); if (el) { el.focus(); const n = el.value.length; try { el.setSelectionRange(n, n); } catch {} } }
 }
@@ -759,6 +923,14 @@ document.addEventListener('click', e => {
     case 'r-freq': S.modal.v.frequency = el.dataset.val; renderModal(); break;
     case 'r-cnt': S.modal.v.target_count = Number(el.dataset.val); renderModal(); break;
     case 'daily': toggleDaily(d, el.dataset.field); break;
+    case 'p-new': openProjectModal('new'); break;
+    case 'p-edit': { const p = S.projects.find(x => x.id === id); if (p) openProjectModal('edit', p); break; }
+    case 'p-del': deleteProject(id); break;
+    case 'p-show': { const k = id + ':' + el.dataset.key; S.pShow[k] = !S.pShow[k]; render(); break; }
+    case 'pt-add': addPTask(id); break;
+    case 'pt-toggle': togglePTask(id); break;
+    case 'pt-del': deletePTask(id); break;
+    case 'pt-send': openSendModal(id); break;
     case 'free-add': addFree(); break;
     case 'free-hide': hideFree(id); break;
     case 'inbox-done': S.showInboxDone = !S.showInboxDone; render(); break;
@@ -788,6 +960,7 @@ document.addEventListener('input', e => {
   const t = e.target;
   if (t.id === 'mood') S.mood = t.value;
   else if (t.id === 'free-new') S.freeNew = t.value;
+  else if ((t.id || '').startsWith('p-add-')) S.pDraft[t.id.slice(6)] = t.value;
   else if (t.dataset && t.dataset.memo) S.memoDraft[t.dataset.memo] = t.value;
   else if (S.modal && t.id === 'm-title') S.modal.v.title = t.value;
   else if (S.modal && t.id === 'm-memo') S.modal.v.memo = t.value;
@@ -812,12 +985,13 @@ document.addEventListener('keydown', e => {
   if (e.key !== 'Enter' || e.isComposing) return;
   if (t.id === 'mood' || (t.dataset && t.dataset.memo)) { e.preventDefault(); t.blur(); }
   else if (t.id === 'free-new') { e.preventDefault(); addFree(); }
+  else if ((t.id || '').startsWith('p-add-')) { e.preventDefault(); addPTask(t.id.slice(6)); }
 });
 
 document.addEventListener('submit', async e => {
   e.preventDefault();
   const f = e.target.dataset.form;
-  if (f === 'task' || f === 'routine') saveModal();
+  if (f === 'task' || f === 'routine' || f === 'project') saveModal();
   if (f === 'lock') {
     const v = ($('#lock-key').value || '').trim();
     if (!v) return;
