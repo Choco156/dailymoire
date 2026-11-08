@@ -53,6 +53,27 @@ svg.i{display:block;flex-shrink:0}
 .mood span{flex-shrink:0;font-family:var(--serif);font-size:14px;color:var(--rose-deep)}
 .mood input{flex:1;min-width:0;height:48px;border:0;background:transparent;outline:none}
 .mood input:disabled{opacity:.5}
+.mood-line{margin-top:20px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px}
+.mood-line .mood{margin-top:0;flex:1 1 320px;max-width:560px}
+.mood-scale{display:flex;align-items:center}
+.mood-dot{display:grid;place-items:center;width:42px;height:44px}
+.mood-dot span{display:block;width:26px;height:26px;border-radius:999px;background:var(--c);transition:transform .15s,box-shadow .15s,opacity .15s}
+.mood-dot:hover:not(:disabled) span{transform:scale(1.12)}
+.mood-dot.on span{transform:scale(1.18);box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--c)}
+.mood-dot.dim span{opacity:.4}
+.mood-dot:disabled{opacity:.4}
+.mweek{margin-top:16px;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.mweek li{display:flex;flex-direction:column;align-items:center}
+.mdot{width:30px;height:30px;border-radius:999px;background:var(--c)}
+.mdot.empty{background:transparent;border:1.5px dashed rgba(155,145,138,.45)}
+.sw{display:inline-block;width:10px;height:10px;border-radius:999px;flex-shrink:0}
+.mbar{display:flex;gap:2px;height:14px;margin-top:16px;border-radius:999px;overflow:hidden}
+.mbar i{display:block;min-width:6px}
+.mlegend{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px 16px;font-size:13px}
+.mlegend li{display:inline-flex;align-items:center;gap:6px;color:var(--mute)}
+.mlegend b{font-weight:500;color:var(--ink);margin-left:2px}
+.mflow .track{position:relative}
+.mflow .pt{position:absolute;left:50%;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:999px}
 .rise{animation:rise .6s cubic-bezier(.2,.7,.2,1) both}
 @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 
