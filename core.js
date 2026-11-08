@@ -59,6 +59,7 @@ const ICONS = {
   up:'<path d="m18 15-6-6-6 6"/>',
   down:'<path d="m6 9 6 6 6-6"/>',
   archive:'<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
+  home:'<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   folder:'<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>'
 };
 const icon = (n, size = 18, sw = 1.75) =>
@@ -78,7 +79,7 @@ function toast(message, kind = 'info') {
 
 /* ---------- 상태 ---------- */
 const S = {
-  page: 'today', today: '', locked: false, loading: true, error: null,
+  page: 'home', today: '', viewDate: '', locked: false, loading: true, error: null,
   tasks: [], inbox: [], upcoming: [], routines: [], routinesAll: [], logs: {}, daily: {}, free: [],
   mood: '', freeNew: '', memoDraft: {}, showInboxDone: false,
   weekStart: '', mlPeriod: 'week', mlAnchor: '',
