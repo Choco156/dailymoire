@@ -12,10 +12,25 @@ function mlRange() {
   return { from: monthStart(S.mlAnchor), to: monthEnd(S.mlAnchor) };
 }
 
+/* 달력: 화면에 보이는 6주 범위 */
+const calGrid = m => ({ s: weekStart(monthStart(m)), e: addDays(weekStart(monthEnd(m)), 6) });
+const fetchMonth = () => {
+  const { s, e } = calGrid(S.calMonth);
+  return rpc('dm_tasks_month', { p_from: s, p_to: e, p_from_ts: parseDate(s).toISOString(), p_to_ts: parseDate(addDays(e, 1)).toISOString() });
+};
+let calSeq = 0;
+async function loadMonth() {
+  const my = ++calSeq;
+  try { const v = await fetchMonth(); if (my !== calSeq) return; S.monthTasks = v; S.calErr = ''; }
+  catch (e) { if (my !== calSeq) return; S.monthTasks = []; S.calErr = e.message; }
+  render();
+}
+
 const LOADERS = {
   async home() {
     const d = S.viewDate;
-    const past = d < S.today;
+    const past = d < S.today, cm = S.calMonth;
+    const monthP = fetchMonth().then(v => ({ v }), e => ({ e }));
     const [t, r, l, dl, f] = await Promise.all([
       past ? rpc('dm_tasks_done_on', { p_from: parseDate(d).toISOString(), p_to: parseDate(addDays(d, 1)).toISOString() })
            : rpc('dm_tasks_today', { p_date: d, p_since: parseDate(d).toISOString() }),
@@ -24,7 +39,9 @@ const LOADERS = {
       rpc('dm_daily_range', { p_from: d, p_to: d }),
       rpc('dm_free_list')
     ]);
+    const mres = await monthP;
     if (d !== S.viewDate) return; // 불러오는 사이 다른 날짜로 넘어갔으면 이 결과는 버림
+    if (cm === S.calMonth) { if (mres.e) { S.monthTasks = []; S.calErr = mres.e.message; } else { S.monthTasks = mres.v; S.calErr = ''; } }
     // 오늘: 이어진 일까지 / 지난 날: 그날 체크(완료)한 일 (마감일과 무관) / 앞날: 그날로 정해둔 일만
     S.tasks = d <= S.today ? t : t.filter(x => x.due_date === d);
     S.routines = r; setLogs(l); setDaily(dl); S.free = f;
@@ -82,6 +99,7 @@ function route() {
   S.page = ['home', 'inbox', 'project', 'routine', 'weekly', 'mylife'].includes(h) ? h : 'home';
   S.today = todayStr();
   S.viewDate = S.today;
+  S.calMonth = monthStart(S.today);
   if (!S.weekStart) S.weekStart = weekStart(S.today);
   if (!S.mlAnchor) S.mlAnchor = S.today;
   closeModal();
@@ -213,7 +231,7 @@ function viewToday() {
           ${done.length ? `<div class="done-box"><p class="lb">완료한 일 ${done.length}</p><ul class="tasks">${done.map(t => taskItem(t, { lock: isFuture })).join('')}</ul></div>` : ''}`;
 
     const tasksCard = `
-      <section class="card tall">
+      <section class="card">
         <div class="row-between" style="margin-bottom:8px">
           <h2 class="lg">${isToday ? "Today's Tasks" : 'Tasks'}</h2>
           ${isPast ? '' : `<button class="btn" data-act="task-new">${icon('plus')}할 일 추가</button>`}
@@ -255,8 +273,46 @@ function viewToday() {
         </div>
       </section>`;
 
-    return `<div class="grid g-today">${tasksCard}${progress}${routine}${free}</div>`;
+    return `<div class="grid g-today"><div class="tall stack">${tasksCard}${calendarCard()}</div>${progress}${routine}${free}</div>`;
   });
+}
+
+/* ---------- 달력 (HOME) ---------- */
+function calDots() {
+  // 지난 날: 그날 체크한 일 / 오늘·앞날: 그날로 정해둔 안 끝난 일 (HOME 화면과 같은 기준)
+  const m = {}, slot = d => m[d] || (m[d] = { open: 0, done: 0 });
+  for (const t of S.monthTasks) {
+    if (t.is_completed) { if (t.completed_at) slot(toStr(new Date(t.completed_at))).done++; }
+    else if (t.due_date && t.due_date >= S.today) slot(t.due_date).open++;
+  }
+  return m;
+}
+
+function calendarCard() {
+  const m = S.calMonth, { s, e } = calGrid(m), dots = calDots();
+  const first = parseDate(m);
+  const cells = rangeDays(s, e).map(d => {
+    const x = dots[d] || { open: 0, done: 0 };
+    const n = Math.min(x.open + x.done, 3);
+    const dotHtml = Array.from({ length: n }, (_, i) => `<i class="${i < x.open ? '' : 'd'}"></i>`).join('');
+    const label = `${fmtMD(d)} ${DOW[dow(d)]}요일${x.open ? ` 예정 ${x.open}개` : ''}${x.done ? ` 완료 ${x.done}개` : ''}`;
+    const cls = ['cal-day', monthStart(d) !== m ? 'out' : '', d === S.today ? 'today' : '', d === S.viewDate ? 'sel' : ''].join(' ');
+    return `<button class="${cls}" data-act="cal-day" data-date="${d}" aria-pressed="${d === S.viewDate}" aria-label="${label}"><span>${parseDate(d).getDate()}</span><span class="cal-dots">${dotHtml}</span></button>`;
+  }).join('');
+  return `
+      <section class="card">
+        <div class="cal-head">
+          <h2 class="lg">${first.getFullYear()}년 ${first.getMonth() + 1}월</h2>
+          <div class="cal-nav">
+            ${m === monthStart(S.today) ? '' : `<button class="text-btn" data-act="cal-this">이번 달</button>`}
+            <button class="icon-btn" data-act="cal-prev" aria-label="이전 달">${icon('left')}</button>
+            <button class="icon-btn" data-act="cal-next" aria-label="다음 달">${icon('right')}</button>
+          </div>
+        </div>
+        <div class="cal">${['월', '화', '수', '목', '금', '토', '일'].map(w => `<span class="dh">${w}</span>`).join('')}${cells}</div>
+        <div class="cal-legend"><span><i></i>예정된 일</span><span><i class="d"></i>체크한 일</span></div>
+        ${S.calErr ? `<p class="err" style="margin-top:12px">달력을 불러오지 못했어요. ${esc(S.calErr)}</p>` : ''}
+      </section>`;
 }
 
 /* ---------- INBOX ---------- */
@@ -817,21 +873,21 @@ async function moveRoutine(id, dir) {
 /* ---------- 할 일 동작 ---------- */
 const allTasks = () => [...S.tasks, ...S.inbox, ...S.upcoming];
 const findTask = id => allTasks().find(t => t.id === id);
-const patchTask = (id, obj) => { for (const k of ['tasks', 'inbox', 'upcoming']) S[k] = S[k].map(t => t.id === id ? { ...t, ...obj } : t); };
-const dropTask = id => { for (const k of ['tasks', 'inbox', 'upcoming']) S[k] = S[k].filter(t => t.id !== id); };
+const patchTask = (id, obj) => { for (const k of ['tasks', 'inbox', 'upcoming', 'monthTasks']) S[k] = S[k].map(t => t.id === id ? { ...t, ...obj } : t); };
+const dropTask = id => { for (const k of ['tasks', 'inbox', 'upcoming', 'monthTasks']) S[k] = S[k].filter(t => t.id !== id); };
 
 async function toggleTask(id) {
   const t = findTask(id); if (!t) return;
   const next = !t.is_completed;
-  patchTask(id, { is_completed: next }); render();
+  patchTask(id, { is_completed: next, completed_at: next ? new Date().toISOString() : null }); render();
   try { const saved = await rpc('dm_task_save', { p_data: { id, is_completed: next } }); patchTask(id, saved); render(); }
-  catch (e) { patchTask(id, { is_completed: !next }); render(); toast('완료 상태를 저장하지 못했어요. ' + e.message, 'error'); }
+  catch (e) { patchTask(id, { is_completed: !next, completed_at: t.completed_at }); render(); toast('완료 상태를 저장하지 못했어요. ' + e.message, 'error'); }
 }
 
 async function deleteTask(id) {
   const t = findTask(id); if (!t) return;
   if (!confirm(`'${t.title}'을(를) 삭제할까요?`)) return;
-  const snap = { tasks: S.tasks, inbox: S.inbox, upcoming: S.upcoming };
+  const snap = { tasks: S.tasks, inbox: S.inbox, upcoming: S.upcoming, monthTasks: S.monthTasks };
   dropTask(id); render();
   try { await rpc('dm_task_delete', { p_id: id }); toast('삭제했어요.'); }
   catch (e) { Object.assign(S, snap); render(); toast('삭제하지 못했어요. ' + e.message, 'error'); }
@@ -940,7 +996,11 @@ document.addEventListener('click', e => {
     case 'retry': loadPage(); break;
     case 'day-prev': shiftDay(-1); break;
     case 'day-next': shiftDay(1); break;
-    case 'day-today': S.viewDate = S.today; loadPage(); break;
+    case 'day-today': S.viewDate = S.today; S.calMonth = monthStart(S.today); loadPage(); break;
+    case 'cal-day': S.viewDate = d; S.calMonth = monthStart(d); window.scrollTo({ top: 0, behavior: 'smooth' }); loadPage(); break;
+    case 'cal-prev': S.calMonth = addMonths(S.calMonth, -1); S.monthTasks = []; render(); loadMonth(); break;
+    case 'cal-next': S.calMonth = addMonths(S.calMonth, 1); S.monthTasks = []; render(); loadMonth(); break;
+    case 'cal-this': S.calMonth = monthStart(S.today); S.monthTasks = []; render(); loadMonth(); break;
     case 'task-new': openModal('new'); break;
     case 'task-edit': { const t = findTask(id); if (t) openModal('edit', t); break; }
     case 'task-toggle': toggleTask(id); break;
@@ -1052,6 +1112,7 @@ document.addEventListener('visibilitychange', () => {
 function shiftDay(n) {
   if (S.page !== 'home' || S.modal) return;
   S.viewDate = addDays(S.viewDate, n);
+  S.calMonth = monthStart(S.viewDate);
   loadPage();
 }
 
