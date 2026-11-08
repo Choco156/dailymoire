@@ -1,6 +1,6 @@
 /* ================================================================
    daymoire · app.js
-   화면(TODAY·INBOX·ROUTINE·WEEKLY·MY LIFE)과 버튼 동작, 시작 처리
+   화면(HOME·INBOX·ROUTINE·WEEKLY·MY LIFE)과 버튼 동작, 시작 처리
    ================================================================ */
 
 /* ---------- 데이터 불러오기 ---------- */
@@ -13,16 +13,21 @@ function mlRange() {
 }
 
 const LOADERS = {
-  async today() {
-    const d = S.today;
+  async home() {
+    const d = S.viewDate;
+    const past = d < S.today;
     const [t, r, l, dl, f] = await Promise.all([
-      rpc('dm_tasks_today', { p_date: d, p_since: parseDate(d).toISOString() }),
+      past ? rpc('dm_tasks_done_on', { p_from: parseDate(d).toISOString(), p_to: parseDate(addDays(d, 1)).toISOString() })
+           : rpc('dm_tasks_today', { p_date: d, p_since: parseDate(d).toISOString() }),
       rpc('dm_routines_list'),
       rpc('dm_routine_logs_range', { p_from: d, p_to: d }),
       rpc('dm_daily_range', { p_from: d, p_to: d }),
       rpc('dm_free_list')
     ]);
-    S.tasks = t; S.routines = r; setLogs(l); setDaily(dl); S.free = f;
+    if (d !== S.viewDate) return; // 불러오는 사이 다른 날짜로 넘어갔으면 이 결과는 버림
+    // 오늘: 이어진 일까지 / 지난 날: 그날 체크(완료)한 일 (마감일과 무관) / 앞날: 그날로 정해둔 일만
+    S.tasks = d <= S.today ? t : t.filter(x => x.due_date === d);
+    S.routines = r; setLogs(l); setDaily(dl); S.free = f;
     S.mood = (dl[0] && dl[0].mood) || '';
   },
   async routine() {
@@ -56,9 +61,12 @@ const LOADERS = {
   }
 };
 
+let loadSeq = 0;
 async function loadPage() {
+  const my = ++loadSeq;
   S.loading = true; S.error = null; render();
-  try { await LOADERS[S.page](); } catch (e) { S.error = e.message; }
+  try { await LOADERS[S.page](); } catch (e) { if (my === loadSeq) S.error = e.message; }
+  if (my !== loadSeq) return; // 더 나중에 요청한 불러오기가 있으면 그쪽이 화면을 그림
   S.loading = false;
   render();
 }
@@ -69,9 +77,11 @@ async function refresh() {
 
 function route() {
   if (S.locked) { render(); return; }
-  const h = (location.hash || '#today').slice(1);
-  S.page = ['today', 'inbox', 'project', 'routine', 'weekly', 'mylife'].includes(h) ? h : 'today';
+  const raw = (location.hash || '#home').slice(1);
+  const h = raw === 'today' ? 'home' : raw; // 예전 #today 주소도 HOME으로
+  S.page = ['home', 'inbox', 'project', 'routine', 'weekly', 'mylife'].includes(h) ? h : 'home';
   S.today = todayStr();
+  S.viewDate = S.today;
   if (!S.weekStart) S.weekStart = weekStart(S.today);
   if (!S.mlAnchor) S.mlAnchor = S.today;
   closeModal();
@@ -81,7 +91,7 @@ function route() {
 
 /* ---------- 공통 화면 ---------- */
 const NAV = [
-  { id: 'today', label: 'TODAY', icon: 'sun' },
+  { id: 'home', label: 'HOME', icon: 'home' },
   { id: 'inbox', label: 'INBOX', icon: 'inbox' },
   { id: 'project', label: 'PROJECT', icon: 'folder' },
   { id: 'routine', label: 'ROUTINE', icon: 'repeat' },
@@ -91,7 +101,7 @@ const NAV = [
 
 const viewSide = () => `
   <aside class="side">
-    <a href="#today" style="padding:0;background:none">${logo()}</a>
+    <a href="#home" style="padding:0;background:none">${logo()}</a>
     <nav>${NAV.map(n => `<a href="#${n.id}" class="${S.page === n.id ? 'on' : ''}">${icon(n.icon)}${n.label}</a>`).join('')}</nav>
     <p class="motto">오늘도 나에게<br>알맞은 속도로.</p>
   </aside>`;
@@ -126,12 +136,12 @@ function sortTasks(list) {
     : String(a.created_at).localeCompare(String(b.created_at)));
 }
 
-function taskItem(t, { moveToday = false, showDate = false } = {}) {
+function taskItem(t, { moveToday = false, showDate = false, lock = false } = {}) {
   const overdue = t.due_date && t.due_date < S.today;
   const done = t.is_completed;
   return `
   <li class="${done ? 'done' : ''}">
-    <button class="check ${done ? 'on' : ''}" data-act="task-toggle" data-id="${t.id}" aria-pressed="${done}" aria-label="${esc(t.title)} ${done ? '완료 취소' : '완료'}"><span>${done ? icon('check', 16, 3) : ''}</span></button>
+    <button class="check ${done ? 'on' : ''}" data-act="task-toggle" data-id="${t.id}" ${lock ? 'disabled' : ''} aria-pressed="${done}" aria-label="${esc(t.title)} ${done ? '완료 취소' : '완료'}"><span>${done ? icon('check', 16, 3) : ''}</span></button>
     <div class="t-body">
       <p class="t-title">${esc(t.title)}</p>
       <div class="t-meta">
@@ -151,7 +161,7 @@ function taskItem(t, { moveToday = false, showDate = false } = {}) {
   </li>`;
 }
 
-/* ---------- TODAY ---------- */
+/* ---------- HOME ---------- */
 function greeting() {
   const h = new Date().getHours();
   if (h < 5) return '늦은 밤이에요. 오늘은 여기까지 해도 괜찮아요.';
@@ -161,7 +171,11 @@ function greeting() {
 }
 
 function viewToday() {
-  const d = S.today, dt = parseDate(d);
+  const d = S.viewDate, dt = parseDate(d);
+  const isToday = d === S.today, isPast = d < S.today, isFuture = d > S.today;
+  const sub = isToday ? greeting()
+    : isPast ? '지나간 하루예요. 이 날 체크한 일만 보여요.'
+    : '아직 오지 않은 날이에요. 할 일만 미리 적어둘 수 있어요.';
   const head = `
     <header class="today-head rise">
       <div class="m-logo">${logo()}</div>
@@ -169,48 +183,64 @@ function viewToday() {
         <h1 class="big-date">${fmtMD(d)}</h1>
         <p class="dow">${DOW[dt.getDay()]}요일<span>${dt.getFullYear()}</span></p>
       </div>
-      <p class="greet">${greeting()}</p>
-      <label class="mood"><span>오늘의 한 줄</span>
-        <input id="mood" maxlength="80" placeholder="기분이나 짧은 다짐을 적어보세요" value="${esc(S.mood)}">
+      <div class="arrows date-nav">
+        <button class="round" data-act="day-prev" aria-label="전날">${icon('left')}</button>
+        <button class="round" data-act="day-next" aria-label="다음 날">${icon('right')}</button>
+        ${isToday ? '' : `<button class="text-btn" data-act="day-today">오늘로</button>`}
+      </div>
+      <p class="greet">${sub}</p>
+      <label class="mood"><span>${isToday ? '오늘의 한 줄' : '그날의 한 줄'}</span>
+        <input id="mood" maxlength="80" placeholder="${isFuture ? '아직 기록할 수 없어요' : '기분이나 짧은 다짐을 적어보세요'}" value="${esc(S.mood)}" ${isFuture ? 'disabled' : ''}>
       </label>
     </header>`;
 
   return head + body(() => {
-    const list = sortTasks(S.tasks);
+    const list = sortTasks(S.tasks).filter(t => !isPast || t.is_completed);
     const open = list.filter(t => !t.is_completed), done = list.filter(t => t.is_completed);
     const rc = S.routines.filter(r => S.logs[lk(r.id, d)]).length;
-    const tr = S.tasks.length ? done.length / S.tasks.length : 0;
+    const tr = list.length ? done.length / list.length : 0;
     const rr = S.routines.length ? rc / S.routines.length : 0;
+
+    const emptyMsg = isToday ? `오늘 정해둔 할 일이 없어요.<br>INBOX에서 오늘로 옮기거나 새로 추가해 보세요.`
+      : isPast ? `이 날 체크한 할 일이 없어요.`
+      : `이 날로 정해둔 할 일이 없어요.<br>위 버튼으로 미리 추가해 둘 수 있어요.`;
+
+    const tasksBody = list.length === 0 ? `<p class="empty">${emptyMsg}</p>`
+      : isPast ? `<ul class="tasks">${done.map(t => taskItem(t)).join('')}</ul>`
+      : `
+          <ul class="tasks">${open.map(t => taskItem(t, { lock: isFuture })).join('')}</ul>
+          ${open.length === 0 && isToday ? `<p class="all-done">오늘 할 일을 모두 마쳤어요.</p>` : ''}
+          ${done.length ? `<div class="done-box"><p class="lb">완료한 일 ${done.length}</p><ul class="tasks">${done.map(t => taskItem(t, { lock: isFuture })).join('')}</ul></div>` : ''}`;
 
     const tasksCard = `
       <section class="card tall">
         <div class="row-between" style="margin-bottom:8px">
-          <h2 class="lg">Today's Tasks</h2>
-          <button class="btn" data-act="task-new">${icon('plus')}할 일 추가</button>
+          <h2 class="lg">${isToday ? "Today's Tasks" : 'Tasks'}</h2>
+          ${isPast ? '' : `<button class="btn" data-act="task-new">${icon('plus')}할 일 추가</button>`}
         </div>
-        ${S.tasks.length === 0 ? `<p class="empty">오늘 정해둔 할 일이 없어요.<br>INBOX에서 오늘로 옮기거나 새로 추가해 보세요.</p>` : `
-          <ul class="tasks">${open.map(t => taskItem(t)).join('')}</ul>
-          ${open.length === 0 ? `<p class="all-done">오늘 할 일을 모두 마쳤어요.</p>` : ''}
-          ${done.length ? `<div class="done-box"><p class="lb">완료한 일 ${done.length}</p><ul class="tasks">${done.map(t => taskItem(t)).join('')}</ul></div>` : ''}
-        `}
+        ${tasksBody}
       </section>`;
+
+    const taskRow = isPast
+      ? `<div><div class="prog-row"><span>할 일</span><span class="mute">완료 ${done.length}개</span></div></div>`
+      : `<div><div class="prog-row"><span>할 일</span><span class="mute">${done.length}/${list.length}<span class="pct">${Math.round(tr * 100)}%</span></span></div>${bar(tr)}</div>`;
 
     const progress = `
       <section class="card sage">
         <div class="row-between"><h2>Daily Progress</h2><p class="cnt">완료 ${done.length + rc}개</p></div>
         <div class="prog">
-          <div><div class="prog-row"><span>할 일</span><span class="mute">${done.length}/${S.tasks.length}<span class="pct">${Math.round(tr * 100)}%</span></span></div>${bar(tr)}</div>
+          ${taskRow}
           <div><div class="prog-row"><span>루틴</span><span class="mute">${rc}/${S.routines.length}<span class="pct">${Math.round(rr * 100)}%</span></span></div>${bar(rr, 'sage')}</div>
         </div>
       </section>`;
 
     const routine = `
       <section class="card">
-        <div class="row-between"><h2>Today's Routine</h2><a class="more" href="#routine">관리${icon('right', 14)}</a></div>
+        <div class="row-between"><h2>${isToday ? "Today's Routine" : 'Routine'}</h2><a class="more" href="#routine">관리${icon('right', 14)}</a></div>
         ${S.routines.length === 0 ? `<p class="empty" style="padding:16px 0">진행 중인 루틴이 없어요.<br>ROUTINE 탭에서 추가해 보세요.</p>` : `
         <ul class="r-grid">${S.routines.map(r => {
           const on = !!S.logs[lk(r.id, d)];
-          return `<li><button class="r-btn ${on ? 'on' : ''}" data-act="routine" data-id="${r.id}" data-date="${d}" aria-pressed="${on}"><span class="dot">${on ? icon('check', 14, 3) : ''}</span>${esc(r.title)}</button></li>`;
+          return `<li><button class="r-btn ${on ? 'on' : ''}" data-act="routine" data-id="${r.id}" data-date="${d}" ${isFuture ? 'disabled' : ''} aria-pressed="${on}"><span class="dot">${on ? icon('check', 14, 3) : ''}</span>${esc(r.title)}</button></li>`;
         }).join('')}</ul>`}
       </section>`;
 
@@ -250,7 +280,7 @@ function viewInbox() {
       </section>
       <section class="card butter">
         <h2>날짜를 정한 일</h2>
-        <p class="note">정한 날이 되면 TODAY에 나타나요.</p>
+        <p class="note">정한 날이 되면 HOME에 나타나요.</p>
         ${S.upcoming.length === 0 ? `<p class="empty" style="padding:24px 0;text-align:left">예정된 할 일이 없어요.</p>`
           : `<ul class="tasks" style="margin-top:8px">${S.upcoming.map(t => taskItem(t, { moveToday: true, showDate: true })).join('')}</ul>`}
       </section>
@@ -322,7 +352,7 @@ function viewProject() {
 
 /* ---------- ROUTINE ---------- */
 function viewRoutine() {
-  const head = pageHead('Routine', '진행 중인 루틴은 TODAY와 WEEKLY에 나타나요.',
+  const head = pageHead('Routine', '진행 중인 루틴은 HOME과 WEEKLY에 나타나요.',
     `<button class="btn" data-act="r-new">${icon('plus')}루틴 추가</button>`);
   return head + body(() => {
     const act = S.routinesAll.filter(r => r.is_active), arc = S.routinesAll.filter(r => !r.is_active);
@@ -347,7 +377,7 @@ function viewRoutine() {
     const archCard = arc.length ? `
       <section class="card butter">
         <h2>보관한 루틴</h2>
-        <p class="note">TODAY·WEEKLY에는 보이지 않고, 지난 체크 기록은 그대로 남아 있어요.</p>
+        <p class="note">HOME·WEEKLY에는 보이지 않고, 지난 체크 기록은 그대로 남아 있어요.</p>
         <ul class="tasks rlist" style="margin-top:8px">${arc.map(r => `
           <li>
             ${meta(r)}
@@ -486,7 +516,7 @@ function viewMyLife() {
     if (!hasData) return `
       <section class="card" style="text-align:center;padding:56px 24px">
         <h2>아직 쌓인 기록이 없어요</h2>
-        <p class="empty" style="padding:8px 0 0">TODAY에서 루틴을 체크하고 WEEKLY에 운동·집밥·외출을 남기면<br>이곳에 나의 생활이 조금씩 모여요.</p>
+        <p class="empty" style="padding:8px 0 0">HOME에서 루틴을 체크하고 WEEKLY에 운동·집밥·외출을 남기면<br>이곳에 나의 생활이 조금씩 모여요.</p>
       </section>`;
 
     const tiles = [
@@ -526,7 +556,7 @@ function openModal(mode, t) {
   S.modal = {
     kind: 'task', mode, id: t ? t.id : null, saving: false, error: '',
     v: t ? { title: t.title, category: t.category, priority: t.priority, due_date: t.due_date, memo: t.memo || '' }
-         : { title: '', category: S.page === 'inbox' ? 'home' : 'must', priority: 'medium', due_date: S.page === 'inbox' ? null : S.today, memo: '' }
+         : { title: '', category: S.page === 'inbox' ? 'home' : 'must', priority: 'medium', due_date: S.page === 'inbox' ? null : (S.page === 'home' ? S.viewDate : S.today), memo: '' }
   };
   document.body.style.overflow = 'hidden';
   renderModal();
@@ -595,8 +625,8 @@ async function saveModal() {
     const saved = await rpc('dm_task_save', { p_data: data });
     closeModal();
     if (!saved.due_date) toast(m.mode === 'edit' && S.page === 'inbox' ? '수정했어요.' : 'INBOX에 보관했어요.');
-    else if (saved.due_date > S.today) toast(`${fmtMD(saved.due_date)}로 일정을 잡았어요. 그날 TODAY에 보여요.`);
-    else toast(m.mode === 'edit' && S.page === 'today' ? '수정했어요.' : '오늘 할 일에 넣었어요.');
+    else if (saved.due_date > S.today) toast(`${fmtMD(saved.due_date)}로 일정을 잡았어요. 그날 HOME에 보여요.`);
+    else toast(m.mode === 'edit' && S.page === 'home' ? '수정했어요.' : '오늘 할 일에 넣었어요.');
     await refresh();
   } catch (e) {
     if (!S.modal) return;
@@ -742,7 +772,7 @@ async function saveRoutineModal() {
     if (m.mode === 'edit') data.id = m.id;
     await rpc('dm_routine_save', { p_data: data });
     closeModal();
-    toast(m.mode === 'edit' ? '수정했어요.' : '루틴을 추가했어요. TODAY에 바로 보여요.');
+    toast(m.mode === 'edit' ? '수정했어요.' : '루틴을 추가했어요. HOME에 바로 보여요.');
     await refresh();
   } catch (e) {
     if (!S.modal) return;
@@ -839,9 +869,10 @@ async function saveMemo(d) {
 }
 
 async function saveMood() {
-  const v = S.mood.trim();
-  if (v === ((S.daily[S.today] && S.daily[S.today].mood) || '')) return;
-  try { S.daily[S.today] = await rpc('dm_daily_set', { p_date: S.today, p_data: { mood: v } }); toast('오늘의 한 줄을 저장했어요.'); }
+  const d = S.viewDate, v = S.mood.trim();
+  if (d > S.today) return;
+  if (v === ((S.daily[d] && S.daily[d].mood) || '')) return;
+  try { S.daily[d] = await rpc('dm_daily_set', { p_date: d, p_data: { mood: v } }); toast(d === S.today ? '오늘의 한 줄을 저장했어요.' : `${fmtMD(d)}의 한 줄을 저장했어요.`); }
   catch (e) { toast('오늘의 한 줄을 저장하지 못했어요. ' + e.message, 'error'); }
 }
 
@@ -889,7 +920,7 @@ function showSetup() {
 }
 
 /* ---------- 그리기 ---------- */
-const VIEWS = { today: viewToday, inbox: viewInbox, project: viewProject, routine: viewRoutine, weekly: viewWeekly, mylife: viewMyLife };
+const VIEWS = { home: viewToday, inbox: viewInbox, project: viewProject, routine: viewRoutine, weekly: viewWeekly, mylife: viewMyLife };
 
 function render() {
   if (S.locked) { $('#app').innerHTML = viewLock(); return; }
@@ -907,6 +938,9 @@ document.addEventListener('click', e => {
   switch (a) {
     case 'noop': return;
     case 'retry': loadPage(); break;
+    case 'day-prev': shiftDay(-1); break;
+    case 'day-next': shiftDay(1); break;
+    case 'day-today': S.viewDate = S.today; loadPage(); break;
     case 'task-new': openModal('new'); break;
     case 'task-edit': { const t = findTask(id); if (t) openModal('edit', t); break; }
     case 'task-toggle': toggleTask(id); break;
@@ -1013,6 +1047,26 @@ document.addEventListener('visibilitychange', () => {
     S.weekStart = weekStart(todayStr()); S.mlAnchor = todayStr(); route();
   }
 });
+
+/* ---------- 날짜 넘기기 (HOME) ---------- */
+function shiftDay(n) {
+  if (S.page !== 'home' || S.modal) return;
+  S.viewDate = addDays(S.viewDate, n);
+  loadPage();
+}
+
+let touch = null;
+document.addEventListener('touchstart', e => {
+  if (S.page !== 'home' || S.modal || S.locked || e.touches.length !== 1 || e.target.closest('input,textarea,select,.scroll-x')) { touch = null; return; }
+  touch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+}, { passive: true });
+document.addEventListener('touchend', e => {
+  if (!touch) return;
+  const t = e.changedTouches[0], dx = t.clientX - touch.x, dy = t.clientY - touch.y;
+  touch = null;
+  if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 2) return; // 가로로 확실히 민 경우만
+  shiftDay(dx < 0 ? 1 : -1);
+}, { passive: true });
 
 /* ---------- 시작 ---------- */
 (function boot() {
