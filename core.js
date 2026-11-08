@@ -58,7 +58,8 @@ const ICONS = {
   repeat:'<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
   up:'<path d="m18 15-6-6-6 6"/>',
   down:'<path d="m6 9 6 6 6-6"/>',
-  archive:'<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>'
+  archive:'<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
+  folder:'<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>'
 };
 const icon = (n, size = 18, sw = 1.75) =>
   `<svg class="i" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
@@ -81,6 +82,7 @@ const S = {
   tasks: [], inbox: [], upcoming: [], routines: [], routinesAll: [], logs: {}, daily: {}, free: [],
   mood: '', freeNew: '', memoDraft: {}, showInboxDone: false,
   weekStart: '', mlPeriod: 'week', mlAnchor: '',
+  projects: [], ptasks: [], pDraft: {}, pShow: {},
   modal: null, lockMsg: ''
 };
 
