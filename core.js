@@ -20,6 +20,14 @@ const CAT_LABEL = { must:'Must Do', home:'Home', routine:'Routine', personal:'Pe
 const CAT_HINT = { must:'꼭 해야 하는 일', home:'집안일', routine:'생활 루틴', personal:'개인 일정' };
 const PRIS = ['high','medium','low'];
 const PRI_LABEL = { high:'높음', medium:'보통', low:'낮음' };
+/* 무드 5단계: 1(좋음, 톤다운 그린) → 5(그냥그래요, 로즈 레드) */
+const MOODS = [
+  { lv:1, label:'좋음', color:'#9DB99B' },
+  { lv:2, label:'괜찮음', color:'#BFCB98' },
+  { lv:3, label:'보통', color:'#E3D79F' },
+  { lv:4, label:'별로', color:'#E6BE9C' },
+  { lv:5, label:'그냥그래요', color:'#DFA6A3' }
+];
 
 /* ---------- 날짜 ---------- */
 const pad = n => String(n).padStart(2, '0');
