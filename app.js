@@ -207,9 +207,15 @@ function viewToday() {
         ${isToday ? '' : `<button class="text-btn" data-act="day-today">오늘로</button>`}
       </div>
       <p class="greet">${sub}</p>
-      <label class="mood"><span>${isToday ? '오늘의 한 줄' : '그날의 한 줄'}</span>
-        <input id="mood" maxlength="80" placeholder="${isFuture ? '아직 기록할 수 없어요' : '기분이나 짧은 다짐을 적어보세요'}" value="${esc(S.mood)}" ${isFuture ? 'disabled' : ''}>
-      </label>
+      <div class="mood-line">
+        <label class="mood"><span>${isToday ? '오늘의 한 줄' : '그날의 한 줄'}</span>
+          <input id="mood" maxlength="80" placeholder="${isFuture ? '아직 기록할 수 없어요' : '기분이나 짧은 다짐을 적어보세요'}" value="${esc(S.mood)}" ${isFuture ? 'disabled' : ''}>
+        </label>
+        <div class="mood-scale" role="group" aria-label="${isToday ? '오늘' : '그날'}의 기분">${MOODS.map(m => {
+          const cur = S.daily[d] && S.daily[d].mood_level;
+          return `<button class="mood-dot ${cur === m.lv ? 'on' : ''} ${cur && cur !== m.lv ? 'dim' : ''}" style="--c:${m.color}" data-act="mood-lv" data-val="${m.lv}" ${isFuture ? 'disabled' : ''} aria-pressed="${cur === m.lv}" aria-label="${m.label}" title="${m.label}"><span></span></button>`;
+        }).join('')}</div>
+      </div>
     </header>`;
 
   return head + body(() => {
@@ -448,6 +454,67 @@ function viewRoutine() {
   });
 }
 
+/* ---------- 무드 ---------- */
+const moodOf = l => (l && l.mood_level >= 1 && l.mood_level <= 5) ? MOODS[l.mood_level - 1] : null;
+
+function moodStats(days) {
+  const counts = [0, 0, 0, 0, 0]; let sum = 0, n = 0;
+  for (const d of days) { const lv = S.daily[d] && S.daily[d].mood_level; if (lv >= 1 && lv <= 5) { counts[lv - 1]++; sum += lv; n++; } }
+  const avgMood = n ? MOODS[Math.round(sum / n) - 1] : null;
+  return { counts, n, avgMood };
+}
+
+async function setMoodLevel(d, lv) {
+  if (d > S.today) return;
+  const prev = S.daily[d] ? { ...S.daily[d] } : null;
+  const next = prev && prev.mood_level === lv ? null : lv; // 같은 색을 다시 누르면 해제
+  S.daily[d] = { ...(prev || { log_date: d }), mood_level: next }; render();
+  try {
+    const saved = await rpc('dm_daily_set', { p_date: d, p_data: { mood_level: next } });
+    if (!('mood_level' in saved)) throw new Error('DB 업데이트(update_04_mood.sql)를 먼저 실행해 주세요.');
+    S.daily[d] = saved; render();
+  } catch (e) {
+    if (prev) S.daily[d] = prev; else delete S.daily[d];
+    render(); toast('무드를 저장하지 못했어요. ' + e.message, 'error');
+  }
+}
+
+function moodWeekCard(days) {
+  const st = moodStats(days);
+  const sum = st.n ? `기록 ${st.n}일 · 평균 ${st.avgMood.label}` : '아직 기록한 날이 없어요';
+  return `
+      <section class="card">
+        <div class="row-between" style="align-items:baseline"><h2>무드</h2><p class="note" style="margin:0">${sum}</p></div>
+        <ul class="mweek">${days.map(d => {
+          const m = moodOf(S.daily[d]);
+          return `<li><span class="dayhead ${d === S.today ? 'on' : ''}">${DOW[dow(d)]}<small>${fmtShort(d)}</small></span><span class="mdot ${m ? '' : 'empty'}" ${m ? `style="--c:${m.color}"` : ''} role="img" title="${m ? m.label : '기록 없음'}" aria-label="${fmtMD(d)} ${m ? m.label : '기록 없음'}"></span></li>`;
+        }).join('')}</ul>
+      </section>`;
+}
+
+function moodLifeCard(from, to) {
+  const all = rangeDays(from, to);
+  const st = moodStats(all.filter(d => d <= S.today));
+  if (!st.n) return `
+        <section class="card"><h2>무드 기록</h2>
+          <p class="empty" style="padding:24px 0 8px">이 기간에 기록한 무드가 없어요.<br>HOME에서 오늘의 한 줄 옆 색을 눌러 남겨 보세요.</p></section>`;
+  const bar = st.counts.map((c, i) => c ? `<i style="flex:${c};background:${MOODS[i].color}" title="${MOODS[i].label} ${c}일"></i>` : '').join('');
+  const legend = MOODS.map((m, i) => `<li><span class="sw" style="background:${m.color}"></span>${m.label}<b>${st.counts[i]}일</b></li>`).join('');
+  const flow = all.map(d => {
+    const m = d <= S.today ? moodOf(S.daily[d]) : null;
+    return `<div class="col" title="${fmtMD(d)} ${m ? m.label : '기록 없음'}"><div class="track">${m ? `<span class="pt" style="top:${8 + (m.lv - 1) / 4 * 84}%;background:${m.color}"></span>` : ''}</div><span class="lb ${d === S.today ? 'on' : ''}">${S.mlPeriod === 'week' ? DOW[dow(d)] : parseDate(d).getDate()}</span></div>`;
+  }).join('');
+  return `
+        <section class="card">
+          <div class="row-between" style="align-items:baseline"><h2>무드 기록</h2>
+            <p class="note" style="margin:0;display:inline-flex;align-items:center;gap:6px"><span class="sw" style="background:${st.avgMood.color}"></span>평균 ${st.avgMood.label} · ${st.n}일 기록</p></div>
+          <div class="mbar" role="img" aria-label="무드 단계별 분포">${bar}</div>
+          <ul class="mlegend">${legend}</ul>
+          <p class="note" style="margin-top:20px">날짜별 흐름 (위쪽일수록 좋은 날)</p>
+          <div class="flow-wrap" style="margin-top:8px"><div class="flow mflow">${flow}</div></div>
+        </section>`;
+}
+
 /* ---------- WEEKLY ---------- */
 const wentOut = l => !!l && (l.went_out || l.exercised); // 헬스장 방문도 외출로 인정
 
@@ -532,7 +599,7 @@ function viewWeekly() {
         }).join('')}</ul>
       </section>`;
 
-    return `<div class="grid">${goalsCard}${table}${records}</div>`;
+    return `<div class="grid">${goalsCard}${moodWeekCard(days)}${table}${records}</div>`;
   });
 }
 
@@ -567,7 +634,7 @@ function viewMyLife() {
     const doneOn = d => R.filter(r => S.logs[lk(r.id, d)]).length;
     const total = days.reduce((s, d) => s + doneOn(d), 0);
     const rate = R.length && days.length ? total / (R.length * days.length) : 0;
-    const hasData = Object.keys(S.logs).length > 0 || Object.values(S.daily).some(l => l.exercised || l.home_cooked || l.went_out);
+    const hasData = Object.keys(S.logs).length > 0 || Object.values(S.daily).some(l => l.exercised || l.home_cooked || l.went_out || l.mood_level);
 
     if (!hasData) return `
       <section class="card" style="text-align:center;padding:56px 24px">
@@ -602,7 +669,7 @@ function viewMyLife() {
               <span class="lb ${d === S.today ? 'on' : ''}">${S.mlPeriod === 'week' ? DOW[dow(d)] : parseDate(d).getDate()}</span>
             </div>`;
           }).join('')}</div></div>
-        </section>
+        </section>${moodLifeCard(from, to)}
       </div>`;
   });
 }
@@ -994,6 +1061,7 @@ document.addEventListener('click', e => {
   switch (a) {
     case 'noop': return;
     case 'retry': loadPage(); break;
+    case 'mood-lv': setMoodLevel(S.viewDate, Number(el.dataset.val)); break;
     case 'day-prev': shiftDay(-1); break;
     case 'day-next': shiftDay(1); break;
     case 'day-today': S.viewDate = S.today; S.calMonth = monthStart(S.today); loadPage(); break;
