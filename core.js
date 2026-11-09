@@ -94,7 +94,7 @@ const S = {
   tasks: [], inbox: [], upcoming: [], routines: [], routinesAll: [], logs: {}, daily: {}, free: [],
   mood: '', music: '', musicUrl: '', openMemos: {}, freeNew: '', memoDraft: {}, showInboxDone: false,
   weekStart: '', mlPeriod: 'week', mlAnchor: '',
-  projects: [], ptasks: [], pDraft: {}, pShow: {},
+  projects: [], ptasks: [], pDraft: {}, pShow: {}, pOpen: {},
   calMonth: '', monthTasks: [], calErr: '',
   modal: null, lockMsg: ''
 };

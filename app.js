@@ -394,19 +394,19 @@ function projectCard(p) {
   return `
   <section class="card">
     <div class="row-between">
-      <h2 class="lg">${esc(p.title)} ${open.length ? `<span style="color:var(--mute);font-size:16px">${open.length}</span>` : ''}</h2>
+      <h2 class="lg"><button class="p-toggle" data-act="p-toggle" data-id="${p.id}" aria-expanded="${!!S.pOpen[p.id]}"><span>${esc(p.title)}</span>${open.length ? `<span class="p-cnt">${open.length}</span>` : ''}<span class="chev ${S.pOpen[p.id] ? 'open' : ''}">${icon('chev', 16)}</span></button></h2>
       <div class="t-acts">
         <button class="icon-btn" data-act="p-edit" data-id="${p.id}" aria-label="${esc(p.title)} 이름 수정">${icon('pencil', 16)}</button>
         <button class="icon-btn" data-act="p-del" data-id="${p.id}" aria-label="${esc(p.title)} 삭제">${icon('trash', 16)}</button>
       </div>
     </div>
-    ${open.length ? `<ul class="tasks pt" style="margin-top:8px">${open.map(t => ptItem(t)).join('')}</ul>` : `<p class="empty" style="padding:20px 0">할 일을 아래에 적어 추가해 보세요.</p>`}
+    ${S.pOpen[p.id] ? `${open.length ? `<ul class="tasks pt" style="margin-top:8px">${open.map(t => ptItem(t)).join('')}</ul>` : `<p class="empty" style="padding:20px 0">할 일을 아래에 적어 추가해 보세요.</p>`}
     <div class="add-row">
       <input id="p-add-${p.id}" class="field" maxlength="200" placeholder="이 프로젝트의 할 일 추가" value="${esc(S.pDraft[p.id] || '')}">
       <button class="sq" data-act="pt-add" data-id="${p.id}" aria-label="할 일 추가">${icon('plus')}</button>
     </div>
     ${section('done', done, 'done', '완료한 일')}
-    ${section('sent', sent, 'sent', 'TODO로 보낸 일')}
+    ${section('sent', sent, 'sent', 'TODO로 보낸 일')}` : ''}
   </section>`;
 }
 
@@ -865,7 +865,8 @@ async function saveProjectModal() {
   try {
     const data = { title: v.title.trim() };
     if (m.mode === 'edit') data.id = m.id;
-    await rpc('dm_project_save', { p_data: data });
+    const savedP = await rpc('dm_project_save', { p_data: data });
+    if (m.mode !== 'edit' && savedP && savedP.id) S.pOpen[savedP.id] = true;
     closeModal();
     toast(m.mode === 'edit' ? '수정했어요.' : '프로젝트를 만들었어요.');
     await refresh();
@@ -1164,6 +1165,7 @@ document.addEventListener('click', e => {
     case 'p-new': openProjectModal('new'); break;
     case 'p-edit': { const p = S.projects.find(x => x.id === id); if (p) openProjectModal('edit', p); break; }
     case 'p-del': deleteProject(id); break;
+    case 'p-toggle': S.pOpen[id] = !S.pOpen[id]; render(); break;
     case 'p-show': { const k = id + ':' + el.dataset.key; S.pShow[k] = !S.pShow[k]; render(); break; }
     case 'pt-add': addPTask(id); break;
     case 'pt-toggle': togglePTask(id); break;
@@ -1262,19 +1264,6 @@ function shiftDay(n) {
   S.calMonth = monthStart(S.viewDate);
   loadPage();
 }
-
-let touch = null;
-document.addEventListener('touchstart', e => {
-  if (S.page !== 'home' || S.modal || S.locked || e.touches.length !== 1 || e.target.closest('input,textarea,select,.scroll-x')) { touch = null; return; }
-  touch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-}, { passive: true });
-document.addEventListener('touchend', e => {
-  if (!touch) return;
-  const t = e.changedTouches[0], dx = t.clientX - touch.x, dy = t.clientY - touch.y;
-  touch = null;
-  if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 2) return; // 가로로 확실히 민 경우만
-  shiftDay(dx < 0 ? 1 : -1);
-}, { passive: true });
 
 /* ---------- 시작 ---------- */
 (function boot() {
