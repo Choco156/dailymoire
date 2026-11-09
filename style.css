@@ -54,7 +54,13 @@ svg.i{display:block;flex-shrink:0}
 .mood input{flex:1;min-width:0;height:48px;border:0;background:transparent;outline:none}
 .mood input:disabled{opacity:.5}
 .mood-line{margin-top:20px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px}
-.mood-line .mood{margin-top:0;flex:1 1 320px;max-width:560px}
+.mood-line .mood{margin-top:0;flex:1 1 260px;max-width:400px}
+.mood input.linked{text-decoration:underline;text-decoration-color:var(--rose);text-underline-offset:5px}
+.mood .m-btn{display:grid;place-items:center;width:34px;height:34px;margin-right:-10px;border-radius:999px;color:var(--mute);flex-shrink:0;transition:background .15s,color .15s}
+.mood .m-btn+.m-btn{margin-left:-6px}
+.mood .m-btn:hover:not(:disabled){background:var(--rose-soft);color:var(--rose-deep)}
+.mood .m-btn.on{color:var(--rose-deep)}
+.mood .m-btn:disabled{opacity:.4}
 .mood-scale{display:flex;align-items:center}
 .mood-dot{display:grid;place-items:center;width:42px;height:44px}
 .mood-dot span{display:block;width:26px;height:26px;border-radius:999px;background:var(--c);transition:transform .15s,box-shadow .15s,opacity .15s}
@@ -144,6 +150,10 @@ svg.i{display:block;flex-shrink:0}
 .b-high{background:var(--rose);color:var(--ink);font-weight:600}
 .tiny{font-size:11px;color:var(--mute)}
 .tiny.warn{color:var(--rose-deep)}
+.t-toggle{display:flex;align-items:flex-start;gap:6px;width:100%;text-align:left}
+.chev{display:inline-grid;flex-shrink:0;margin-top:2px;color:var(--mute);transition:transform .15s,color .15s}
+.chev.open{transform:rotate(180deg)}
+.t-toggle:hover .chev{color:var(--rose-deep)}
 .t-memo{margin-top:6px;font-size:14px;line-height:1.6;color:var(--mute);white-space:pre-wrap;word-break:break-word}
 .t-acts{display:flex;align-items:center;flex-shrink:0}
 .to-today{display:inline-flex;align-items:center;gap:4px;height:36px;padding:0 12px;margin-right:4px;border-radius:999px;background:var(--butter-soft);font-size:12px;font-weight:500}

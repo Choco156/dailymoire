@@ -46,6 +46,7 @@ const LOADERS = {
     S.tasks = d <= S.today ? t : t.filter(x => x.due_date === d);
     S.routines = r; setLogs(l); setDaily(dl); S.free = f;
     S.mood = (dl[0] && dl[0].mood) || '';
+    S.music = (dl[0] && dl[0].music) || ''; S.musicUrl = (dl[0] && dl[0].music_url) || '';
   },
   async routine() {
     S.routinesAll = await rpc('dm_routines_all');
@@ -161,7 +162,7 @@ function taskItem(t, { moveToday = false, showDate = false, lock = false } = {})
   <li class="${done ? 'done' : ''}">
     <button class="check ${done ? 'on' : ''}" data-act="task-toggle" data-id="${t.id}" ${lock ? 'disabled' : ''} aria-pressed="${done}" aria-label="${esc(t.title)} ${done ? '완료 취소' : '완료'}"><span>${done ? icon('check', 16, 3) : ''}</span></button>
     <div class="t-body">
-      <p class="t-title">${esc(t.title)}</p>
+      ${t.memo ? `<button class="t-toggle" data-act="memo-toggle" data-id="${t.id}" aria-expanded="${!!S.openMemos[t.id]}"><span class="t-title">${esc(t.title)}</span><span class="chev ${S.openMemos[t.id] ? 'open' : ''}">${icon('chev', 16)}</span></button>` : `<p class="t-title">${esc(t.title)}</p>`}
       <div class="t-meta">
         <span class="badge b-${t.category}">${CAT_LABEL[t.category]}</span>
         ${t.priority === 'high' ? `<span class="badge b-high">중요</span>` : ''}
@@ -169,7 +170,7 @@ function taskItem(t, { moveToday = false, showDate = false, lock = false } = {})
         ${overdue && !done ? `<span class="tiny warn">${fmtShort(t.due_date)}부터 이어진 일</span>` : ''}
         ${showDate && t.due_date && !overdue ? `<span class="tiny">${fmtMD(t.due_date)}</span>` : ''}
       </div>
-      ${t.memo ? `<p class="t-memo">${esc(t.memo)}</p>` : ''}
+      ${t.memo && S.openMemos[t.id] ? `<p class="t-memo">${esc(t.memo)}</p>` : ''}
     </div>
     <div class="t-acts">
       ${moveToday && !done ? `<button class="to-today" data-act="task-today" data-id="${t.id}">${icon('calplus', 14)}오늘로</button>` : ''}
@@ -190,6 +191,7 @@ function greeting() {
 
 function viewToday() {
   const d = S.viewDate, dt = parseDate(d);
+  const musicOk = !!S.musicUrl && /^https?:\/\//i.test(S.musicUrl);
   const isToday = d === S.today, isPast = d < S.today, isFuture = d > S.today;
   const sub = isToday ? greeting()
     : isPast ? '지나간 하루예요. 이 날 체크한 일만 보여요.'
@@ -211,6 +213,11 @@ function viewToday() {
         <label class="mood"><span>${isToday ? '오늘의 한 줄' : '그날의 한 줄'}</span>
           <input id="mood" maxlength="80" placeholder="${isFuture ? '아직 기록할 수 없어요' : '기분이나 짧은 다짐을 적어보세요'}" value="${esc(S.mood)}" ${isFuture ? 'disabled' : ''}>
         </label>
+        <div class="mood music"><span>${isToday ? '오늘의 음악' : '그날의 음악'}</span>
+          <input id="music" class="${musicOk ? 'linked' : ''}" maxlength="80" placeholder="${isFuture ? '아직 기록할 수 없어요' : '요즘 꽂힌 노래 한 곡'}" value="${esc(S.music)}" ${isFuture ? 'disabled' : ''}>
+          ${musicOk ? `<a class="m-btn" href="${esc(S.musicUrl)}" target="_blank" rel="noopener noreferrer" aria-label="링크 열기" title="링크 열기">${icon('ext', 16)}</a>` : ''}
+          <button type="button" class="m-btn ${musicOk ? 'on' : ''}" data-act="music-link" ${isFuture ? 'disabled' : ''} aria-label="${musicOk ? '링크 수정' : '링크 추가'}" title="${musicOk ? '링크 수정' : '링크 추가'}">${icon('link', 16)}</button>
+        </div>
         <div class="mood-scale" role="group" aria-label="${isToday ? '오늘' : '그날'}의 기분">${MOODS.map(m => {
           const cur = S.daily[d] && S.daily[d].mood_level;
           return `<button class="mood-dot ${cur === m.lv ? 'on' : ''} ${cur && cur !== m.lv ? 'dim' : ''}" style="--c:${m.color}" data-act="mood-lv" data-val="${m.lv}" ${isFuture ? 'disabled' : ''} aria-pressed="${cur === m.lv}" aria-label="${m.label}" title="${m.label}"><span></span></button>`;
@@ -454,6 +461,70 @@ function viewRoutine() {
   });
 }
 
+/* ---------- 오늘의 음악 ---------- */
+async function saveMusic() {
+  const d = S.viewDate, v = S.music.trim();
+  if (d > S.today) return;
+  if (v === ((S.daily[d] && S.daily[d].music) || '')) return;
+  try {
+    const saved = await rpc('dm_daily_set', { p_date: d, p_data: { music: v } });
+    if (!('music' in saved)) throw new Error('DB 업데이트(update_05_music.sql)를 먼저 실행해 주세요.');
+    S.daily[d] = saved;
+    toast(d === S.today ? '오늘의 음악을 저장했어요.' : `${fmtMD(d)}의 음악을 저장했어요.`);
+  } catch (e) { toast('음악을 저장하지 못했어요. ' + e.message, 'error'); }
+}
+
+function openMusicModal() {
+  if (S.viewDate > S.today) return;
+  S.modal = { kind: 'music', date: S.viewDate, saving: false, error: '', v: { url: S.musicUrl || '' } };
+  document.body.style.overflow = 'hidden';
+  renderModal();
+  const el = $('#m-url'); if (el) el.focus();
+}
+
+function renderMusicModal() {
+  const m = S.modal, v = m.v;
+  $('#modal').innerHTML = `
+  <div class="backdrop" data-act="m-close">
+    <div class="dialog" role="dialog" aria-modal="true" aria-label="노래 링크" data-act="noop">
+      <div class="row-between">
+        <h2>노래 링크</h2>
+        <button class="icon-btn" data-act="m-close" aria-label="닫기">${icon('x', 20)}</button>
+      </div>
+      <form class="form" data-form="music">
+        <div><label class="lbl" for="m-url">링크 (유튜브, 스포티파이 등)</label>
+          <input id="m-url" class="inp" inputmode="url" autocapitalize="none" autocomplete="off" placeholder="https://" value="${esc(v.url)}">
+          <p class="note" style="margin-top:8px">링크는 화면에 보이지 않고, 노래 제목 옆 ${icon('ext', 14)} 버튼을 누르면 열려요.</p></div>
+        ${m.error ? `<p class="err" role="alert">${esc(m.error)}</p>` : ''}
+        <button type="submit" class="submit" ${m.saving ? 'disabled' : ''}>${m.saving ? '저장하는 중…' : '링크 저장'}</button>
+        ${S.musicUrl ? `<button type="button" class="text-btn" data-act="music-unlink">링크 지우기</button>` : ''}
+      </form>
+    </div>
+  </div>`;
+}
+
+async function saveMusicModal(unlink = false) {
+  const m = S.modal;
+  let url = unlink ? '' : m.v.url.trim();
+  if (url) {
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) url = 'https://' + url;
+    try { const u = new URL(url); if (!/^https?:$/.test(u.protocol)) throw new Error('scheme'); url = u.href; }
+    catch (e) { m.error = '올바른 링크를 넣어 주세요. (예: https://youtu.be/…)'; renderModal(); return; }
+  }
+  m.saving = true; m.error = ''; renderModal();
+  try {
+    const saved = await rpc('dm_daily_set', { p_date: m.date, p_data: { music_url: url } });
+    if (!('music_url' in saved)) throw new Error('DB 업데이트(update_05_music.sql)를 먼저 실행해 주세요.');
+    S.daily[m.date] = saved;
+    if (m.date === S.viewDate) S.musicUrl = saved.music_url || '';
+    closeModal(); render();
+    toast(url ? '링크를 저장했어요.' : '링크를 지웠어요.');
+  } catch (e) {
+    if (!S.modal) return;
+    m.saving = false; m.error = '저장하지 못했어요. ' + e.message; renderModal();
+  }
+}
+
 /* ---------- 무드 ---------- */
 const moodOf = l => (l && l.mood_level >= 1 && l.mood_level <= 5) ? MOODS[l.mood_level - 1] : null;
 
@@ -531,7 +602,7 @@ function weeklyGoals(days) {
   rows.push({ label: '집밥', tl: '수~일요일', count: days.filter(d => [3,4,5,6,0].includes(dow(d)) && S.daily[d]?.home_cooked).length, target: 5 });
   const room = find('방 정리'); if (room) rows.push(row(room));
   const sh = find('샤워'), wa = find('세안');
-  if (sh && wa) rows.push({ label: '샤워 및 세안', tl: '매일', count: days.filter(d => S.logs[lk(sh.id, d)] && S.logs[lk(wa.id, d)]).length, target: 7 });
+  if (sh && wa) rows.push({ label: '샤워 및 세안', tl: '매일', count: days.filter(d => S.logs[lk(sh.id, d)] || S.logs[lk(wa.id, d)]).length, target: 7 });
   const care = find('홈케어');
   if (care) rows.push(row(care, '홈케어', care.frequency === 'weekly' && care.target_count === 2 ? '주 2~3회' : freqLabel(care)));
   rows.push({ label: '외출', tl: '수~금 중 2일 이상', count: days.filter(d => [3,4,5].includes(dow(d)) && wentOut(S.daily[d])).length, target: 2 });
@@ -697,6 +768,7 @@ function renderModal() {
   if (!m) { $('#modal').innerHTML = ''; return; }
   if (m.kind === 'routine') { renderRoutineModal(); return; }
   if (m.kind === 'project') { renderProjectModal(); return; }
+  if (m.kind === 'music') { renderMusicModal(); return; }
   const v = m.v;
   const oc = (on) => `ochip ${on ? 'on' : ''}`;
   $('#modal').innerHTML = `
@@ -733,6 +805,7 @@ async function saveModal() {
   const m = S.modal; const v = m.v;
   if (m.kind === 'routine') return saveRoutineModal();
   if (m.kind === 'project') return saveProjectModal();
+  if (m.kind === 'music') return saveMusicModal();
   if (!v.title.trim()) { m.error = '할 일 제목을 입력해 주세요.'; renderModal(); return; }
   m.saving = true; m.error = ''; renderModal();
   try {
@@ -1048,7 +1121,7 @@ const VIEWS = { home: viewToday, inbox: viewInbox, project: viewProject, routine
 function render() {
   if (S.locked) { $('#app').innerHTML = viewLock(); return; }
   const active = document.activeElement;
-  const keepId = active && (active.id === 'mood' || active.id === 'free-new' || (active.id || '').startsWith('p-add-')) ? active.id : null;
+  const keepId = active && (active.id === 'mood' || active.id === 'music' || active.id === 'free-new' || (active.id || '').startsWith('p-add-')) ? active.id : null;
   $('#app').innerHTML = `<div class="shell">${viewSide()}<main class="main"><div class="wrap">${VIEWS[S.page]()}</div></main>${viewBottomNav()}</div>`;
   if (keepId) { const el = document.getElementById(keepId); if (el) { el.focus(); const n = el.value.length; try { el.setSelectionRange(n, n); } catch {} } }
 }
@@ -1062,6 +1135,9 @@ document.addEventListener('click', e => {
     case 'noop': return;
     case 'retry': loadPage(); break;
     case 'mood-lv': setMoodLevel(S.viewDate, Number(el.dataset.val)); break;
+    case 'music-link': openMusicModal(); break;
+    case 'music-unlink': saveMusicModal(true); break;
+    case 'memo-toggle': S.openMemos[id] = !S.openMemos[id]; render(); break;
     case 'day-prev': shiftDay(-1); break;
     case 'day-next': shiftDay(1); break;
     case 'day-today': S.viewDate = S.today; S.calMonth = monthStart(S.today); loadPage(); break;
@@ -1121,6 +1197,8 @@ document.addEventListener('click', e => {
 document.addEventListener('input', e => {
   const t = e.target;
   if (t.id === 'mood') S.mood = t.value;
+  else if (t.id === 'music') S.music = t.value;
+  else if (S.modal && t.id === 'm-url') S.modal.v.url = t.value;
   else if (t.id === 'free-new') S.freeNew = t.value;
   else if ((t.id || '').startsWith('p-add-')) S.pDraft[t.id.slice(6)] = t.value;
   else if (t.dataset && t.dataset.memo) S.memoDraft[t.dataset.memo] = t.value;
@@ -1138,6 +1216,7 @@ function renderModalChipsOnly() {
 document.addEventListener('change', e => {
   const t = e.target;
   if (t.id === 'mood') saveMood();
+  else if (t.id === 'music') saveMusic();
   else if (t.dataset && t.dataset.memo) saveMemo(t.dataset.memo);
 });
 
@@ -1145,7 +1224,7 @@ document.addEventListener('keydown', e => {
   const t = e.target;
   if (e.key === 'Escape' && S.modal) { closeModal(); return; }
   if (e.key !== 'Enter' || e.isComposing) return;
-  if (t.id === 'mood' || (t.dataset && t.dataset.memo)) { e.preventDefault(); t.blur(); }
+  if (t.id === 'mood' || t.id === 'music' || (t.dataset && t.dataset.memo)) { e.preventDefault(); t.blur(); }
   else if (t.id === 'free-new') { e.preventDefault(); addFree(); }
   else if ((t.id || '').startsWith('p-add-')) { e.preventDefault(); addPTask(t.id.slice(6)); }
 });
@@ -1153,7 +1232,7 @@ document.addEventListener('keydown', e => {
 document.addEventListener('submit', async e => {
   e.preventDefault();
   const f = e.target.dataset.form;
-  if (f === 'task' || f === 'routine' || f === 'project') saveModal();
+  if (f === 'task' || f === 'routine' || f === 'project' || f === 'music') saveModal();
   if (f === 'lock') {
     const v = ($('#lock-key').value || '').trim();
     if (!v) return;
