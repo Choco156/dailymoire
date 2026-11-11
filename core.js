@@ -70,6 +70,7 @@ const ICONS = {
   link:'<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
   ext:'<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   chev:'<path d="m6 9 6 6 6-6"/>',
+  utensils:'<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>',
   home:'<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   folder:'<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>'
 };
@@ -93,7 +94,8 @@ const S = {
   page: 'home', today: '', viewDate: '', locked: false, loading: true, error: null,
   tasks: [], inbox: [], upcoming: [], routines: [], routinesAll: [], logs: {}, daily: {}, free: [],
   mood: '', music: '', musicUrl: '', openMemos: {}, freeNew: '', memoDraft: {}, showInboxDone: false,
-  weekStart: '', mlPeriod: 'week', mlAnchor: '',
+  mlPeriod: 'week', mlAnchor: '',
+  mealDate: '', meal: [], mealGoal: null, mealDraft: {}, mealKeep: false, mealTotals: null, homeMeal: null,
   projects: [], ptasks: [], pDraft: {}, pShow: {}, pOpen: {},
   calMonth: '', monthTasks: [], calErr: '',
   modal: null, lockMsg: ''

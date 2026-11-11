@@ -1,6 +1,6 @@
 /* ================================================================
    daymoire · app.js
-   화면(HOME·INBOX·ROUTINE·WEEKLY·MY LIFE)과 버튼 동작, 시작 처리
+   화면(HOME·INBOX·PROJECT·MEAL·ROUTINE·MY LIFE)과 버튼 동작, 시작 처리
    ================================================================ */
 
 /* ---------- 데이터 불러오기 ---------- */
@@ -31,6 +31,7 @@ const LOADERS = {
     const d = S.viewDate;
     const past = d < S.today, cm = S.calMonth;
     const monthP = fetchMonth().then(v => ({ v }), e => ({ e }));
+    const mealP = Promise.all([rpc('dm_meal_day', { p_date: d }), rpc('dm_meal_goal')]).then(v => ({ v }), e => ({ e }));
     const [t, r, l, dl, f] = await Promise.all([
       past ? rpc('dm_tasks_done_on', { p_from: parseDate(d).toISOString(), p_to: parseDate(addDays(d, 1)).toISOString() })
            : rpc('dm_tasks_today', { p_date: d, p_since: parseDate(d).toISOString() }),
@@ -39,9 +40,11 @@ const LOADERS = {
       rpc('dm_daily_range', { p_from: d, p_to: d }),
       rpc('dm_free_list')
     ]);
-    const mres = await monthP;
+    const mres = await monthP, mealRes = await mealP;
     if (d !== S.viewDate) return; // 불러오는 사이 다른 날짜로 넘어갔으면 이 결과는 버림
     if (cm === S.calMonth) { if (mres.e) { S.monthTasks = []; S.calErr = mres.e.message; } else { S.monthTasks = mres.v; S.calErr = ''; } }
+    S.homeMeal = mealRes.e ? null : { kcal: kcalSum(mealRes.v[0]), n: mealRes.v[0].length }; // SQL 미적용이면 HOME 식단 카드는 숨김
+    if (!mealRes.e) S.mealGoal = mealRes.v[1];
     // 오늘: 이어진 일까지 / 지난 날: 그날 체크(완료)한 일 (마감일과 무관) / 앞날: 그날로 정해둔 일만
     S.tasks = d <= S.today ? t : t.filter(x => x.due_date === d);
     S.routines = r; setLogs(l); setDaily(dl); S.free = f;
@@ -59,23 +62,25 @@ const LOADERS = {
     const [a, b] = await Promise.all([rpc('dm_tasks_inbox'), rpc('dm_tasks_upcoming', { p_date: S.today })]);
     S.inbox = a; S.upcoming = b;
   },
-  async weekly() {
-    const s = S.weekStart, e = addDays(s, 6);
-    const [r, l, dl] = await Promise.all([
-      rpc('dm_routines_list'),
-      rpc('dm_routine_logs_range', { p_from: s, p_to: e }),
-      rpc('dm_daily_range', { p_from: s, p_to: e })
-    ]);
-    S.routines = r; setLogs(l); setDaily(dl);
-  },
   async mylife() {
     const { from, to } = mlRange();
+    // 식단 통계는 있으면 보여주는 용도라서, 못 불러와도 페이지는 계속 열려요
+    const mealP = Promise.all([rpc('dm_meal_totals', { p_from: from, p_to: to }), rpc('dm_meal_goal')]).then(v => ({ v }), e => ({ e }));
     const [r, l, dl] = await Promise.all([
       rpc('dm_routines_list'),
       rpc('dm_routine_logs_range', { p_from: from, p_to: to }),
       rpc('dm_daily_range', { p_from: from, p_to: to })
     ]);
+    const meal = await mealP;
     S.routines = r; setLogs(l); setDaily(dl);
+    S.mealTotals = meal.e ? null : Object.fromEntries(meal.v[0].map(x => [x.day, { kcal: x.kcal_total, n: x.entries }]));
+    if (!meal.e) S.mealGoal = meal.v[1];
+  },
+  async meal() {
+    const d = S.mealDate;
+    const [items, goal] = await Promise.all([rpc('dm_meal_day', { p_date: d }), rpc('dm_meal_goal')]);
+    if (d !== S.mealDate) return; // 불러오는 사이 다른 날짜로 넘어갔으면 버림
+    S.meal = items; S.mealGoal = goal;
   }
 };
 
@@ -97,11 +102,11 @@ function route() {
   if (S.locked) { render(); return; }
   const raw = (location.hash || '#home').slice(1);
   const h = raw === 'today' ? 'home' : raw; // 예전 #today 주소도 HOME으로
-  S.page = ['home', 'inbox', 'project', 'routine', 'weekly', 'mylife'].includes(h) ? h : 'home';
+  S.page = ['home', 'inbox', 'project', 'meal', 'routine', 'mylife'].includes(h) ? h : 'home';
   S.today = todayStr();
   S.viewDate = S.today;
   S.calMonth = monthStart(S.today);
-  if (!S.weekStart) S.weekStart = weekStart(S.today);
+  if (S.mealKeep) S.mealKeep = false; else S.mealDate = S.today; // HOME 식단 카드에서 넘어온 경우만 그 날짜 유지
   if (!S.mlAnchor) S.mlAnchor = S.today;
   closeModal();
   window.scrollTo(0, 0);
@@ -113,8 +118,8 @@ const NAV = [
   { id: 'home', label: 'HOME', icon: 'home' },
   { id: 'inbox', label: 'INBOX', icon: 'inbox' },
   { id: 'project', label: 'PROJECT', icon: 'folder' },
+  { id: 'meal', label: 'MEAL', icon: 'utensils' },
   { id: 'routine', label: 'ROUTINE', icon: 'repeat' },
-  { id: 'weekly', label: 'WEEKLY', icon: 'cal' },
   { id: 'mylife', label: 'MY LIFE', icon: 'sprout' }
 ];
 
@@ -286,7 +291,18 @@ function viewToday() {
         </div>
       </section>`;
 
-    return `<div class="grid g-today"><div class="tall stack">${tasksCard}${calendarCard()}</div>${progress}${routine}${free}</div>`;
+    const mealCard = !S.homeMeal ? '' : (() => {
+      const goal = S.mealGoal, k = S.homeMeal.kcal, r = goal ? k / goal : 0;
+      return `
+      <section class="card">
+        <div class="row-between"><h2>${isToday ? "Today's Meal" : 'Meal'}</h2><a class="more" href="#meal" data-act="meal-open">식단 보기${icon('right', 14)}</a></div>
+        <p class="home-kcal">${fmtKcal(k)} <small>${goal ? `/ ${fmtKcal(goal)} kcal` : 'kcal'}</small></p>
+        ${goal ? bar(r, r > 1 ? 'over' : 'sage') : ''}
+        ${S.homeMeal.n === 0 ? `<p class="note" style="margin-top:12px">${isFuture ? '아직 오지 않은 날이에요.' : '아직 기록한 식단이 없어요.'}</p>` : ''}
+      </section>`;
+    })();
+
+    return `<div class="grid g-today"><div class="tall stack">${tasksCard}${calendarCard()}</div>${progress}${mealCard}${routine}${free}</div>`;
   });
 }
 
@@ -421,7 +437,7 @@ function viewProject() {
 
 /* ---------- ROUTINE ---------- */
 function viewRoutine() {
-  const head = pageHead('Routine', '진행 중인 루틴은 HOME과 WEEKLY에 나타나요.',
+  const head = pageHead('Routine', '진행 중인 루틴은 HOME과 MY LIFE에 나타나요.',
     `<button class="btn" data-act="r-new">${icon('plus')}루틴 추가</button>`);
   return head + body(() => {
     const act = S.routinesAll.filter(r => r.is_active), arc = S.routinesAll.filter(r => !r.is_active);
@@ -446,7 +462,7 @@ function viewRoutine() {
     const archCard = arc.length ? `
       <section class="card butter">
         <h2>보관한 루틴</h2>
-        <p class="note">HOME·WEEKLY에는 보이지 않고, 지난 체크 기록은 그대로 남아 있어요.</p>
+        <p class="note">HOME·MY LIFE에는 보이지 않고, 지난 체크 기록은 그대로 남아 있어요.</p>
         <ul class="tasks rlist" style="margin-top:8px">${arc.map(r => `
           <li>
             ${meta(r)}
@@ -558,7 +574,7 @@ function moodWeekCard(days) {
         <div class="row-between" style="align-items:baseline"><h2>무드</h2><p class="note" style="margin:0">${sum}</p></div>
         <ul class="mweek">${days.map(d => {
           const m = moodOf(S.daily[d]);
-          return `<li><span class="dayhead ${d === S.today ? 'on' : ''}">${DOW[dow(d)]}<small>${fmtShort(d)}</small></span><span class="mdot ${m ? '' : 'empty'}" ${m ? `style="--c:${m.color}"` : ''} role="img" title="${m ? m.label : '기록 없음'}" aria-label="${fmtMD(d)} ${m ? m.label : '기록 없음'}"></span></li>`;
+          return `<li><span class="dayhead ${d === S.today ? 'on' : ''}">${DOW[dow(d)]}<small>${fmtShort(d)}</small></span><span class="mdot ${m ? '' : 'none'}" ${m ? `style="--c:${m.color}"` : ''} role="img" title="${m ? m.label : '기록 없음'}" aria-label="${fmtMD(d)} ${m ? m.label : '기록 없음'}"></span></li>`;
         }).join('')}</ul>
       </section>`;
 }
@@ -614,16 +630,10 @@ function weeklyGoals(days) {
   return rows;
 }
 
-function viewWeekly() {
-  const s = S.weekStart, days = rangeDays(s, addDays(s, 6));
+function weeklySection(s) {
+  const days = rangeDays(s, addDays(s, 6));
   const isThis = s === weekStart(S.today);
-  const right = `<div class="arrows">
-    <button class="round" data-act="week-prev" aria-label="지난주">${icon('left')}</button>
-    ${isThis ? '' : `<button class="text-btn" data-act="week-this">이번 주</button>`}
-    <button class="round" data-act="week-next" aria-label="다음 주">${icon('right')}</button></div>`;
-  const head = pageHead('Weekly', `${fmtMD(days[0])} ~ ${fmtMD(days[6])}`, right);
-
-  return head + body(() => {
+  const build = () => {
     const goals = weeklyGoals(days);
     const met = goals.filter(g => g.count >= g.target).length;
     const goalsCard = `
@@ -671,7 +681,162 @@ function viewWeekly() {
       </section>`;
 
     return `<div class="grid">${goalsCard}${moodWeekCard(days)}${table}${records}</div>`;
+  };
+  return `<div class="row-between" style="margin:40px 0 16px;align-items:baseline"><h2 style="font-family:var(--serif);font-weight:400;font-size:24px">Weekly</h2><p class="note" style="margin:0">${fmtMD(days[0])} ~ ${fmtMD(days[6])}</p></div>${build()}`;
+}
+
+/* ---------- MEAL ---------- */
+const MEALS = [{ k: 'breakfast', l: '아침' }, { k: 'lunch', l: '점심' }, { k: 'dinner', l: '저녁' }, { k: 'snack', l: '간식' }];
+const kcalSum = list => list.reduce((s, x) => s + (x.kcal || 0), 0);
+const fmtKcal = n => Number(n).toLocaleString('ko-KR');
+const mealDraft = k => S.mealDraft[k] || (S.mealDraft[k] = { name: '', kcal: '' });
+
+function viewMeal() {
+  const d = S.mealDate, isToday = d === S.today, future = d > S.today;
+  const nav = `<div class="arrows">
+    <button class="round" data-act="meal-prev" aria-label="전날">${icon('left')}</button>
+    ${isToday ? '' : `<button class="text-btn" data-act="meal-today">오늘로</button>`}
+    <button class="round" data-act="meal-next" aria-label="다음 날">${icon('right')}</button></div>`;
+  const head = pageHead('Meal', `${fmtMD(d)} ${DOW[dow(d)]}요일`, nav);
+
+  return head + body(() => {
+    const goal = S.mealGoal, total = kcalSum(S.meal);
+    const left = goal ? goal - total : null, over = left !== null && left < 0;
+    const summary = `
+      <section class="card sage">
+        <div class="meal-stats">
+          <div><p class="ms-l">목표</p><label class="goal"><input id="meal-goal" inputmode="numeric" maxlength="5" placeholder="설정" value="${goal || ''}" aria-label="목표 칼로리"><small>kcal</small></label></div>
+          <div><p class="ms-l">섭취</p><p class="v">${fmtKcal(total)}<small>kcal</small></p></div>
+          <div><p class="ms-l">${over ? '초과' : '남음'}</p><p class="v ${over ? 'over' : ''}">${goal ? `${fmtKcal(Math.abs(left))}<small>kcal</small>` : '-'}</p></div>
+        </div>
+        ${goal ? bar(total / goal, over ? 'over' : 'sage') : `<p class="note">목표 칼로리를 적으면 남은 양을 계산해 드려요.</p>`}
+        ${future ? `<p class="note" style="margin-top:12px">아직 오지 않은 날이라 입력할 수 없어요.</p>` : ''}
+      </section>`;
+
+    const cards = MEALS.map(m => {
+      const list = S.meal.filter(x => x.meal === m.k), dr = mealDraft(m.k);
+      return `
+      <section class="card">
+        <div class="row-between"><h2>${m.l}</h2><p class="meal-sum">${list.length ? `${fmtKcal(kcalSum(list))}<small>kcal</small>` : ''}</p></div>
+        ${list.length ? `<ul class="meal-list">${list.map(x => `
+          <li>
+            <button class="m-row" data-act="meal-edit" data-id="${x.id}" ${future ? 'disabled' : ''}><span class="mn ${x.name ? '' : 'mute'}">${x.name ? esc(x.name) : '칼로리만 기록'}</span><span class="mk">${x.kcal != null ? `${fmtKcal(x.kcal)} kcal` : ''}</span></button>
+            <button class="icon-btn" data-act="meal-del" data-id="${x.id}" ${future ? 'disabled' : ''} aria-label="${esc(x.name || '칼로리 기록')} 삭제">${icon('trash', 16)}</button>
+          </li>`).join('')}</ul>` : `<p class="empty" style="padding:16px 0">아직 기록이 없어요.</p>`}
+        ${future ? '' : `<div class="add-row meal-add">
+          <input id="meal-name-${m.k}" class="field" maxlength="100" placeholder="음식 이름" value="${esc(dr.name)}">
+          <input id="meal-kcal-${m.k}" class="field kcal" inputmode="numeric" maxlength="4" placeholder="kcal" value="${esc(dr.kcal)}" aria-label="${m.l} 칼로리">
+          <button class="sq" data-act="meal-add" data-id="${m.k}" aria-label="${m.l} 추가">${icon('plus')}</button>
+        </div>`}
+      </section>`;
+    }).join('');
+
+    return `<div class="grid g-meal">${summary}${cards}</div>`;
   });
+}
+
+function shiftMeal(n) { S.mealDate = addDays(S.mealDate, n); loadPage(); }
+
+async function addMeal(k) {
+  if (S.mealDate > S.today) return;
+  const dr = mealDraft(k), name = dr.name.trim(), kcal = dr.kcal === '' ? null : Number(dr.kcal);
+  if (!name && kcal === null) { toast('음식 이름이나 칼로리를 적어 주세요.', 'error'); return; }
+  try {
+    const row = await rpc('dm_meal_save', { p_data: { log_date: S.mealDate, meal: k, name, kcal } });
+    S.meal = [...S.meal, row]; S.mealDraft[k] = { name: '', kcal: '' }; render();
+    const el = document.getElementById('meal-name-' + k); if (el) el.focus();
+  } catch (e) { toast('저장하지 못했어요. ' + e.message, 'error'); }
+}
+
+async function deleteMeal(id) {
+  const x = S.meal.find(m => m.id === id); if (!x) return;
+  if (!confirm(`'${x.name || (fmtKcal(x.kcal) + ' kcal')}' 기록을 삭제할까요?`)) return;
+  const snap = S.meal;
+  S.meal = S.meal.filter(m => m.id !== id); render();
+  try { await rpc('dm_meal_delete', { p_id: id }); toast('삭제했어요.'); }
+  catch (e) { S.meal = snap; render(); toast('삭제하지 못했어요. ' + e.message, 'error'); }
+}
+
+async function saveGoal(raw) {
+  const digits = String(raw).replace(/\D/g, ''), v = digits ? Number(digits) : null;
+  if (v === (S.mealGoal || null)) { render(); return; }
+  if (v !== null && (v < 100 || v > 20000)) { toast('목표는 100~20,000 kcal 사이로 적어 주세요.', 'error'); render(); return; }
+  const prev = S.mealGoal;
+  S.mealGoal = v; render();
+  try { await rpc('dm_meal_goal_set', { p_kcal: v }); toast(v ? '목표 칼로리를 저장했어요.' : '목표 칼로리를 지웠어요.'); }
+  catch (e) { S.mealGoal = prev; render(); toast('목표를 저장하지 못했어요. ' + e.message, 'error'); }
+}
+
+function openMealModal(id) {
+  const x = S.meal.find(m => m.id === id); if (!x || x.log_date > S.today) return;
+  S.modal = { kind: 'meal', id, label: (MEALS.find(m => m.k === x.meal) || {}).l || '식단', saving: false, error: '', v: { name: x.name || '', kcal: x.kcal == null ? '' : String(x.kcal) } };
+  document.body.style.overflow = 'hidden';
+  renderModal();
+  const el = $('#m-mname'); if (el) el.focus();
+}
+
+function renderMealModal() {
+  const m = S.modal, v = m.v;
+  $('#modal').innerHTML = `
+  <div class="backdrop" data-act="m-close">
+    <div class="dialog" role="dialog" aria-modal="true" aria-label="${m.label} 기록 수정" data-act="noop">
+      <div class="row-between">
+        <h2>${m.label} 기록 수정</h2>
+        <button class="icon-btn" data-act="m-close" aria-label="닫기">${icon('x', 20)}</button>
+      </div>
+      <form class="form" data-form="meal">
+        <div><label class="lbl" for="m-mname">음식 이름</label>
+          <input id="m-mname" class="inp" maxlength="100" placeholder="비워 두면 칼로리만 기록돼요" value="${esc(v.name)}"></div>
+        <div><label class="lbl" for="m-mkcal">칼로리 (kcal)</label>
+          <input id="m-mkcal" class="inp" inputmode="numeric" maxlength="4" placeholder="모르면 비워 두세요" value="${esc(v.kcal)}"></div>
+        ${m.error ? `<p class="err" role="alert">${esc(m.error)}</p>` : ''}
+        <button type="submit" class="submit" ${m.saving ? 'disabled' : ''}>${m.saving ? '저장하는 중…' : '수정 저장'}</button>
+      </form>
+    </div>
+  </div>`;
+}
+
+async function saveMealModal() {
+  const m = S.modal, name = m.v.name.trim(), kcal = m.v.kcal === '' ? null : Number(m.v.kcal);
+  if (!name && kcal === null) { m.error = '음식 이름이나 칼로리 중 하나는 적어 주세요.'; renderModal(); return; }
+  m.saving = true; m.error = ''; renderModal();
+  try {
+    const row = await rpc('dm_meal_save', { p_data: { id: m.id, name, kcal } });
+    S.meal = S.meal.map(x => x.id === m.id ? row : x);
+    closeModal(); render(); toast('수정했어요.');
+  } catch (e) {
+    if (!S.modal) return;
+    m.saving = false; m.error = '저장하지 못했어요. ' + e.message; renderModal();
+  }
+}
+
+/* MY LIFE의 식단 구역 (보기만) */
+function mealLifeCard(from, to) {
+  if (!S.mealTotals) return ''; // 식단 SQL 전이거나 못 불러왔으면 조용히 생략
+  const all = rangeDays(from, to);
+  const rec = all.filter(d => d <= S.today && S.mealTotals[d] && S.mealTotals[d].n > 0);
+  if (!rec.length) return `
+        <section class="card"><h2>식단</h2>
+          <p class="empty" style="padding:24px 0 8px">이 기간에 기록한 식단이 없어요.<br>MEAL 탭에서 먹은 것을 적어 보세요.</p></section>`;
+  const goal = S.mealGoal || 0, kc = d => (S.mealTotals[d] ? S.mealTotals[d].kcal : 0);
+  const avg = Math.round(rec.reduce((s, d) => s + kc(d), 0) / rec.length);
+  const overDays = goal ? rec.filter(d => kc(d) > goal).length : 0;
+  const max = Math.max(goal, ...rec.map(kc)) * 1.1 || 1;
+  const flow = all.map(d => {
+    const v = rec.includes(d) ? kc(d) : 0;
+    return `<div class="col" title="${fmtMD(d)} ${rec.includes(d) ? fmtKcal(v) + ' kcal' : '기록 없음'}"><div class="track">${goal ? `<i class="gl" style="bottom:${goal / max * 100}%"></i>` : ''}<div class="fill ${goal && v > goal ? 'over' : ''}" style="height:${v > 0 ? Math.max(v / max * 100, 6) : 0}%"></div></div><span class="lb ${d === S.today ? 'on' : ''}">${S.mlPeriod === 'week' ? DOW[dow(d)] : parseDate(d).getDate()}</span></div>`;
+  }).join('');
+  return `
+        <section class="card">
+          <h2>식단</h2>
+          <div class="meal-stats" style="margin-top:16px">
+            <div><p class="ms-l">일평균</p><p class="v">${fmtKcal(avg)}<small>kcal</small></p></div>
+            <div><p class="ms-l">기록한 날</p><p class="v">${rec.length}<small>일</small></p></div>
+            <div><p class="ms-l">목표 초과</p><p class="v ${overDays ? 'over' : ''}">${goal ? `${overDays}<small>일</small>` : '-'}</p></div>
+          </div>
+          <p class="note">날짜별 섭취 칼로리${goal ? ` (점선은 목표 ${fmtKcal(goal)} kcal)` : ''} · 기록한 날 기준 평균</p>
+          <div class="flow-wrap" style="margin-top:8px"><div class="flow kflow">${flow}</div></div>
+        </section>`;
 }
 
 /* ---------- MY LIFE ---------- */
@@ -705,13 +870,15 @@ function viewMyLife() {
     const doneOn = d => R.filter(r => S.logs[lk(r.id, d)]).length;
     const total = days.reduce((s, d) => s + doneOn(d), 0);
     const rate = R.length && days.length ? total / (R.length * days.length) : 0;
-    const hasData = Object.keys(S.logs).length > 0 || Object.values(S.daily).some(l => l.exercised || l.home_cooked || l.went_out || l.mood_level);
+    const hasData = Object.keys(S.logs).length > 0 || Object.values(S.daily).some(l => l.exercised || l.home_cooked || l.went_out || l.mood_level)
+      || Object.values(S.mealTotals || {}).some(x => x.n > 0);
+    const weekly = S.mlPeriod === 'week' ? weeklySection(from) : ''; // 주간일 때만 아래에 Weekly 구역
 
     if (!hasData) return `
       <section class="card" style="text-align:center;padding:56px 24px">
         <h2>아직 쌓인 기록이 없어요</h2>
-        <p class="empty" style="padding:8px 0 0">HOME에서 루틴을 체크하고 WEEKLY에 운동·집밥·외출을 남기면<br>이곳에 나의 생활이 조금씩 모여요.</p>
-      </section>`;
+        <p class="empty" style="padding:8px 0 0">HOME에서 루틴을 체크하고 주간 보기 아래 Weekly에 운동·집밥·외출을 남기면<br>이곳에 나의 생활이 조금씩 모여요.</p>
+      </section>${weekly}`;
 
     const tiles = [
       [`${prefix} 운동`, days.filter(d => S.daily[d]?.exercised).length, '회'],
@@ -740,8 +907,8 @@ function viewMyLife() {
               <span class="lb ${d === S.today ? 'on' : ''}">${S.mlPeriod === 'week' ? DOW[dow(d)] : parseDate(d).getDate()}</span>
             </div>`;
           }).join('')}</div></div>
-        </section>${moodLifeCard(from, to)}
-      </div>`;
+        </section>${moodLifeCard(from, to)}${mealLifeCard(from, to)}
+      </div>${weekly}`;
   });
 }
 
@@ -769,6 +936,7 @@ function renderModal() {
   if (m.kind === 'routine') { renderRoutineModal(); return; }
   if (m.kind === 'project') { renderProjectModal(); return; }
   if (m.kind === 'music') { renderMusicModal(); return; }
+  if (m.kind === 'meal') { renderMealModal(); return; }
   const v = m.v;
   const oc = (on) => `ochip ${on ? 'on' : ''}`;
   $('#modal').innerHTML = `
@@ -806,6 +974,7 @@ async function saveModal() {
   if (m.kind === 'routine') return saveRoutineModal();
   if (m.kind === 'project') return saveProjectModal();
   if (m.kind === 'music') return saveMusicModal();
+  if (m.kind === 'meal') return saveMealModal();
   if (!v.title.trim()) { m.error = '할 일 제목을 입력해 주세요.'; renderModal(); return; }
   m.saving = true; m.error = ''; renderModal();
   try {
@@ -952,7 +1121,7 @@ function renderRoutineModal() {
         ${v.frequency === 'weekly' ? `
         <div><span class="lbl">주 목표 횟수</span><div class="ochips">${[1, 2, 3, 4, 5, 6].map(n =>
           `<button type="button" class="${oc(v.target_count === n)}" data-act="r-cnt" data-val="${n}">${n}회</button>`).join('')}</div>
-          <p class="note" style="margin-top:8px">체크는 매일 할 수 있고, WEEKLY 목표에서 이 횟수를 채웠는지 보여줘요.</p></div>` : ''}
+          <p class="note" style="margin-top:8px">체크는 매일 할 수 있고, MY LIFE의 주간 목표에서 이 횟수를 채웠는지 보여줘요.</p></div>` : ''}
         ${m.error ? `<p class="err" role="alert">${esc(m.error)}</p>` : ''}
         <button type="submit" class="submit" ${m.saving ? 'disabled' : ''}>${m.saving ? '저장하는 중…' : m.mode === 'edit' ? '수정 저장' : '루틴 추가'}</button>
       </form>
@@ -1117,12 +1286,12 @@ function showSetup() {
 }
 
 /* ---------- 그리기 ---------- */
-const VIEWS = { home: viewToday, inbox: viewInbox, project: viewProject, routine: viewRoutine, weekly: viewWeekly, mylife: viewMyLife };
+const VIEWS = { home: viewToday, inbox: viewInbox, project: viewProject, meal: viewMeal, routine: viewRoutine, mylife: viewMyLife };
 
 function render() {
   if (S.locked) { $('#app').innerHTML = viewLock(); return; }
   const active = document.activeElement;
-  const keepId = active && (active.id === 'mood' || active.id === 'music' || active.id === 'free-new' || (active.id || '').startsWith('p-add-')) ? active.id : null;
+  const keepId = active && (active.id === 'mood' || active.id === 'music' || active.id === 'free-new' || (active.id || '').startsWith('p-add-') || (active.id || '').startsWith('meal-')) ? active.id : null;
   $('#app').innerHTML = `<div class="shell">${viewSide()}<main class="main"><div class="wrap">${VIEWS[S.page]()}</div></main>${viewBottomNav()}</div>`;
   if (keepId) { const el = document.getElementById(keepId); if (el) { el.focus(); const n = el.value.length; try { el.setSelectionRange(n, n); } catch {} } }
 }
@@ -1174,9 +1343,13 @@ document.addEventListener('click', e => {
     case 'free-add': addFree(); break;
     case 'free-hide': hideFree(id); break;
     case 'inbox-done': S.showInboxDone = !S.showInboxDone; render(); break;
-    case 'week-prev': S.weekStart = addDays(S.weekStart, -7); loadPage(); break;
-    case 'week-next': S.weekStart = addDays(S.weekStart, 7); loadPage(); break;
-    case 'week-this': S.weekStart = weekStart(S.today); loadPage(); break;
+    case 'meal-prev': shiftMeal(-1); break;
+    case 'meal-next': shiftMeal(1); break;
+    case 'meal-today': S.mealDate = S.today; loadPage(); break;
+    case 'meal-add': addMeal(id); break;
+    case 'meal-edit': openMealModal(id); break;
+    case 'meal-del': deleteMeal(id); break;
+    case 'meal-open': S.mealDate = S.viewDate; S.mealKeep = true; break; // 링크 이동은 a 태그가 처리
     case 'ml-period': S.mlPeriod = el.dataset.val; S.mlAnchor = S.today; loadPage(); break;
     case 'ml-prev': S.mlAnchor = S.mlPeriod === 'week' ? addDays(weekStart(S.mlAnchor), -7) : addMonths(S.mlAnchor, -1); loadPage(); break;
     case 'ml-next': S.mlAnchor = S.mlPeriod === 'week' ? addDays(weekStart(S.mlAnchor), 7) : addMonths(S.mlAnchor, 1); loadPage(); break;
@@ -1201,6 +1374,10 @@ document.addEventListener('input', e => {
   if (t.id === 'mood') S.mood = t.value;
   else if (t.id === 'music') S.music = t.value;
   else if (S.modal && t.id === 'm-url') S.modal.v.url = t.value;
+  else if (S.modal && t.id === 'm-mname') S.modal.v.name = t.value;
+  else if (S.modal && t.id === 'm-mkcal') { const v = t.value.replace(/\D/g, ''); if (v !== t.value) t.value = v; S.modal.v.kcal = v; }
+  else if ((t.id || '').startsWith('meal-name-')) mealDraft(t.id.slice(10)).name = t.value;
+  else if ((t.id || '').startsWith('meal-kcal-')) { const v = t.value.replace(/\D/g, ''); if (v !== t.value) t.value = v; mealDraft(t.id.slice(10)).kcal = v; }
   else if (t.id === 'free-new') S.freeNew = t.value;
   else if ((t.id || '').startsWith('p-add-')) S.pDraft[t.id.slice(6)] = t.value;
   else if (t.dataset && t.dataset.memo) S.memoDraft[t.dataset.memo] = t.value;
@@ -1219,6 +1396,7 @@ document.addEventListener('change', e => {
   const t = e.target;
   if (t.id === 'mood') saveMood();
   else if (t.id === 'music') saveMusic();
+  else if (t.id === 'meal-goal') saveGoal(t.value);
   else if (t.dataset && t.dataset.memo) saveMemo(t.dataset.memo);
 });
 
@@ -1226,15 +1404,16 @@ document.addEventListener('keydown', e => {
   const t = e.target;
   if (e.key === 'Escape' && S.modal) { closeModal(); return; }
   if (e.key !== 'Enter' || e.isComposing) return;
-  if (t.id === 'mood' || t.id === 'music' || (t.dataset && t.dataset.memo)) { e.preventDefault(); t.blur(); }
+  if (t.id === 'mood' || t.id === 'music' || t.id === 'meal-goal' || (t.dataset && t.dataset.memo)) { e.preventDefault(); t.blur(); }
   else if (t.id === 'free-new') { e.preventDefault(); addFree(); }
   else if ((t.id || '').startsWith('p-add-')) { e.preventDefault(); addPTask(t.id.slice(6)); }
+  else if ((t.id || '').startsWith('meal-name-') || (t.id || '').startsWith('meal-kcal-')) { e.preventDefault(); addMeal(t.id.slice(10)); }
 });
 
 document.addEventListener('submit', async e => {
   e.preventDefault();
   const f = e.target.dataset.form;
-  if (f === 'task' || f === 'routine' || f === 'project' || f === 'music') saveModal();
+  if (f === 'task' || f === 'routine' || f === 'project' || f === 'music' || f === 'meal') saveModal();
   if (f === 'lock') {
     const v = ($('#lock-key').value || '').trim();
     if (!v) return;
@@ -1253,7 +1432,7 @@ document.addEventListener('submit', async e => {
 document.addEventListener('visibilitychange', () => {
   // 다음 날 앱을 다시 열면 오늘 날짜로 새로고침
   if (!document.hidden && sb && !S.locked && S.today && todayStr() !== S.today) {
-    S.weekStart = weekStart(todayStr()); S.mlAnchor = todayStr(); route();
+    S.mlAnchor = todayStr(); route();
   }
 });
 
