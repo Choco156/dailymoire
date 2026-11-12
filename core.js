@@ -96,6 +96,7 @@ const S = {
   mood: '', music: '', musicUrl: '', openMemos: {}, freeNew: '', memoDraft: {}, showInboxDone: false,
   mlPeriod: 'week', mlAnchor: '',
   mealDate: '', meal: [], mealGoal: null, mealDraft: {}, mealKeep: false, mealTotals: null, homeMeal: null,
+  mealTab: 'meal', fridge: [], fridgeFilter: 'all', fridgeEdit: false, fridgeDraft: '',
   projects: [], ptasks: [], pDraft: {}, pShow: {}, pOpen: {},
   calMonth: '', monthTasks: [], calErr: '',
   modal: null, lockMsg: ''

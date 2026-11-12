@@ -77,6 +77,7 @@ const LOADERS = {
     if (!meal.e) S.mealGoal = meal.v[1];
   },
   async meal() {
+    if (S.mealTab === 'fridge') { S.fridge = await rpc('dm_fridge_list'); return; }
     const d = S.mealDate;
     const [items, goal] = await Promise.all([rpc('dm_meal_day', { p_date: d }), rpc('dm_meal_goal')]);
     if (d !== S.mealDate) return; // 불러오는 사이 다른 날짜로 넘어갔으면 버림
@@ -106,6 +107,7 @@ function route() {
   S.today = todayStr();
   S.viewDate = S.today;
   S.calMonth = monthStart(S.today);
+  S.mealTab = 'meal';
   if (S.mealKeep) S.mealKeep = false; else S.mealDate = S.today; // HOME 식단 카드에서 넘어온 경우만 그 날짜 유지
   if (!S.mlAnchor) S.mlAnchor = S.today;
   closeModal();
@@ -692,6 +694,7 @@ const fmtKcal = n => Number(n).toLocaleString('ko-KR');
 const mealDraft = k => S.mealDraft[k] || (S.mealDraft[k] = { name: '', kcal: '' });
 
 function viewMeal() {
+  if (S.mealTab === 'fridge') return viewFridge();
   const d = S.mealDate, isToday = d === S.today, future = d > S.today;
   const nav = `<div class="arrows">
     <button class="round" data-act="meal-prev" aria-label="전날">${icon('left')}</button>
@@ -699,7 +702,7 @@ function viewMeal() {
     <button class="round" data-act="meal-next" aria-label="다음 날">${icon('right')}</button></div>`;
   const head = pageHead('Meal', `${fmtMD(d)} ${DOW[dow(d)]}요일`, nav);
 
-  return head + body(() => {
+  return head + mealTabs() + body(() => {
     const goal = S.mealGoal, total = kcalSum(S.meal);
     const left = goal ? goal - total : null, over = left !== null && left < 0;
     const summary = `
@@ -804,6 +807,156 @@ async function saveMealModal() {
     const row = await rpc('dm_meal_save', { p_data: { id: m.id, name, kcal } });
     S.meal = S.meal.map(x => x.id === m.id ? row : x);
     closeModal(); render(); toast('수정했어요.');
+  } catch (e) {
+    if (!S.modal) return;
+    m.saving = false; m.error = '저장하지 못했어요. ' + e.message; renderModal();
+  }
+}
+
+/* ---------- 냉장고 (MEAL 안) ---------- */
+const PLACES = [{ k: 'fridge', l: '냉장' }, { k: 'freezer', l: '냉동' }, { k: 'pantry', l: '실온' }];
+const placeLabel = k => (PLACES.find(p => p.k === k) || {}).l || '';
+const dayDiff = ds => Math.round((parseDate(ds) - parseDate(S.today)) / 86400000);
+
+function mealTabs() {
+  return `<div class="seg" role="tablist" style="margin-bottom:24px">
+    <button role="tab" class="${S.mealTab === 'meal' ? 'on' : ''}" aria-selected="${S.mealTab === 'meal'}" data-act="meal-tab" data-val="meal">식단</button>
+    <button role="tab" class="${S.mealTab === 'fridge' ? 'on' : ''}" aria-selected="${S.mealTab === 'fridge'}" data-act="meal-tab" data-val="fridge">냉장고</button>
+  </div>`;
+}
+
+/* 날짜 표시: 소비기한은 D-day, 구매일은 며칠 전. rank: 기한 지남 0 < 기한 있음 1 < 구매일 2 < 날짜 없음 3 */
+function dateInfo(x) {
+  if (!x.item_date) return { text: '', cls: '', rank: 3, n: 0 };
+  const n = dayDiff(x.item_date);
+  if (x.date_kind === 'expire') {
+    if (n < 0) return { text: `기한 ${-n}일 지남`, cls: 'bad', rank: 0, n };
+    if (n === 0) return { text: '오늘까지', cls: 'warn', rank: 1, n };
+    return { text: `D-${n}`, cls: n <= 3 ? 'warn' : '', rank: 1, n };
+  }
+  return { text: n >= 0 ? '오늘 구매' : `${-n}일 전 구매`, cls: '', rank: 2, n };
+}
+
+function viewFridge() {
+  const head = pageHead('Meal', '냉장고에 있는 재료를 정리해요.');
+  return head + mealTabs() + body(() => {
+    const staples = S.fridge.filter(x => x.is_staple);
+    const items = S.fridge.filter(x => !x.is_staple);
+    const shown = (S.fridgeFilter === 'all' ? items : items.filter(x => x.place === S.fridgeFilter))
+      .map(x => ({ x, info: dateInfo(x) }))
+      .sort((a, b) => a.info.rank - b.info.rank
+        || (a.info.rank < 3 ? a.info.n - b.info.n : String(b.x.created_at).localeCompare(String(a.x.created_at))));
+
+    const stapleCard = `
+      <section class="card">
+        <div class="row-between"><h2>자주 쓰는 재료</h2><button class="text-btn" data-act="staple-edit">${S.fridgeEdit ? '완료' : '편집'}</button></div>
+        ${staples.length ? `
+          <div class="chips" style="margin-top:12px">${staples.map(x => `
+            <span class="fchip-wrap"><button class="fchip ${x.in_stock ? 'on' : 'off'}" data-act="staple-toggle" data-id="${x.id}" aria-pressed="${!!x.in_stock}">${esc(x.name)}</button>${S.fridgeEdit ? `<button class="fchip-x" data-act="staple-del" data-id="${x.id}" aria-label="${esc(x.name)} 삭제">${icon('x', 12)}</button>` : ''}</span>`).join('')}</div>
+          <p class="note" style="margin-top:12px">눌러서 있음/없음을 바꿔요. 흐리게 보이면 없는 재료예요.</p>`
+        : `<p class="empty" style="padding:20px 0 8px">자주 쓰는 재료를 등록해 두면 있음/없음만 눌러서 관리할 수 있어요.<br>오른쪽 위 '편집'에서 추가해 보세요.</p>`}
+        ${S.fridgeEdit ? `<div class="add-row"><input id="staple-new" class="field" maxlength="30" placeholder="자주 쓰는 재료 이름 (예: 계란)" value="${esc(S.fridgeDraft)}"><button class="sq" data-act="staple-add" aria-label="추가">${icon('plus')}</button></div>` : ''}
+      </section>`;
+
+    const filters = [['all', '전체', items.length], ...PLACES.map(p => [p.k, p.l, items.filter(x => x.place === p.k).length])];
+    const listCard = `
+      <section class="card">
+        <div class="row-between"><h2>재료 목록</h2><button class="btn" data-act="fridge-new">${icon('plus')}재료 추가</button></div>
+        <div class="chips" style="margin:12px 0 4px">${filters.map(([k, l, n]) => `<button class="fchip ${S.fridgeFilter === k ? 'sel' : ''}" data-act="fridge-filter" data-val="${k}" aria-pressed="${S.fridgeFilter === k}">${l}<small>${n}</small></button>`).join('')}</div>
+        ${shown.length ? `<ul class="meal-list">${shown.map(({ x, info }) => `
+          <li class="fr-row">
+            <button class="m-row" data-act="fridge-edit" data-id="${x.id}">
+              <span class="mn">${esc(x.name)}${x.qty ? `<small class="qty">${esc(x.qty)}</small>` : ''}</span>
+              <span class="fr-meta"><span class="tag">${placeLabel(x.place)}</span>${info.text ? `<span class="dd ${info.cls}">${info.text}</span>` : ''}</span>
+            </button>
+            <button class="used" data-act="fridge-used" data-id="${x.id}" aria-label="${esc(x.name)} 다 씀">다 씀</button>
+          </li>`).join('')}</ul>`
+        : `<p class="empty">${items.length ? '이 보관 위치에는 재료가 없어요.' : `아직 적어 둔 재료가 없어요.<br>'재료 추가'로 냉장고 속을 적어 보세요.`}</p>`}
+      </section>`;
+
+    return `<div class="grid">${stapleCard}${listCard}</div>`;
+  });
+}
+
+const patchFridge = (id, obj) => { S.fridge = S.fridge.map(x => x.id === id ? { ...x, ...obj } : x); };
+
+async function toggleStaple(id) {
+  const x = S.fridge.find(i => i.id === id); if (!x) return;
+  const next = !x.in_stock;
+  patchFridge(id, { in_stock: next }); render();
+  try { const row = await rpc('dm_fridge_save', { p_data: { id, in_stock: next } }); patchFridge(id, row); render(); }
+  catch (e) { patchFridge(id, { in_stock: !next }); render(); toast('저장하지 못했어요. ' + e.message, 'error'); }
+}
+
+async function addStaple() {
+  const name = S.fridgeDraft.trim(); if (!name) return;
+  if (S.fridge.some(x => x.is_staple && x.name === name)) { toast('이미 있는 재료예요.', 'error'); return; }
+  try {
+    const row = await rpc('dm_fridge_save', { p_data: { name, is_staple: true } });
+    S.fridge = [...S.fridge, row]; S.fridgeDraft = ''; render();
+    const el = document.getElementById('staple-new'); if (el) el.focus();
+  } catch (e) { toast('추가하지 못했어요. ' + e.message, 'error'); }
+}
+
+async function removeFridge(id, msg, ask) {
+  const x = S.fridge.find(i => i.id === id); if (!x) return;
+  if (ask && !confirm(ask(x))) return;
+  const snap = S.fridge;
+  S.fridge = S.fridge.filter(i => i.id !== id); render();
+  try { await rpc('dm_fridge_delete', { p_id: id }); toast(msg(x)); }
+  catch (e) { S.fridge = snap; render(); toast('삭제하지 못했어요. ' + e.message, 'error'); }
+}
+
+function openFridgeModal(id) {
+  const x = id ? S.fridge.find(i => i.id === id) : null;
+  S.modal = { kind: 'fridge', id: x ? x.id : null, saving: false, error: '',
+    v: x ? { name: x.name, qty: x.qty || '', place: x.place, date_kind: x.date_kind || '', item_date: x.item_date || '' }
+         : { name: '', qty: '', place: 'fridge', date_kind: '', item_date: '' } };
+  document.body.style.overflow = 'hidden';
+  renderModal();
+  const el = $('#m-fname'); if (el) el.focus();
+}
+
+function renderFridgeModal() {
+  const m = S.modal, v = m.v;
+  const oc = on => `ochip ${on ? 'on' : ''}`;
+  const title = m.id ? '재료 수정' : '새 재료';
+  $('#modal').innerHTML = `
+  <div class="backdrop" data-act="m-close">
+    <div class="dialog" role="dialog" aria-modal="true" aria-label="${title}" data-act="noop">
+      <div class="row-between">
+        <h2>${title}</h2>
+        <button class="icon-btn" data-act="m-close" aria-label="닫기">${icon('x', 20)}</button>
+      </div>
+      <form class="form" data-form="fridge">
+        <div><label class="lbl" for="m-fname">재료 이름</label>
+          <input id="m-fname" class="inp" maxlength="60" placeholder="예: 대파, 닭가슴살" value="${esc(v.name)}"></div>
+        <div><label class="lbl" for="m-fqty">수량 메모</label>
+          <input id="m-fqty" class="inp" maxlength="40" placeholder="예: 2개, 반 봉지 (비워도 돼요)" value="${esc(v.qty)}"></div>
+        <div><span class="lbl">보관 위치</span><div class="ochips">${PLACES.map(p => `<button type="button" class="${oc(v.place === p.k)}" data-act="f-place" data-val="${p.k}">${p.l}</button>`).join('')}</div></div>
+        <div><span class="lbl">날짜</span><div class="ochips">
+          <button type="button" class="${oc(v.date_kind === 'expire')}" data-act="f-dkind" data-val="expire">소비기한</button>
+          <button type="button" class="${oc(v.date_kind === 'buy')}" data-act="f-dkind" data-val="buy">구매일</button>
+          <button type="button" class="${oc(!v.date_kind)}" data-act="f-dkind" data-val="">날짜 없음</button></div>
+          ${v.date_kind ? `<input id="m-fdate" type="date" class="inp" style="margin-top:8px" value="${v.item_date || ''}">` : ''}</div>
+        ${m.error ? `<p class="err" role="alert">${esc(m.error)}</p>` : ''}
+        <button type="submit" class="submit" ${m.saving ? 'disabled' : ''}>${m.saving ? '저장하는 중…' : m.id ? '수정 저장' : '재료 추가'}</button>
+      </form>
+    </div>
+  </div>`;
+}
+
+async function saveFridgeModal() {
+  const m = S.modal, v = m.v, name = v.name.trim();
+  if (!name) { m.error = '재료 이름을 적어 주세요.'; renderModal(); return; }
+  if (v.date_kind && !v.item_date) { m.error = '날짜를 골라 주세요. 날짜가 필요 없으면 "날짜 없음"을 선택하세요.'; renderModal(); return; }
+  m.saving = true; m.error = ''; renderModal();
+  try {
+    const data = { name, qty: v.qty.trim(), place: v.place, date_kind: v.date_kind, item_date: v.date_kind ? v.item_date : '' };
+    if (m.id) data.id = m.id; else data.is_staple = false;
+    const row = await rpc('dm_fridge_save', { p_data: data });
+    S.fridge = m.id ? S.fridge.map(x => x.id === m.id ? row : x) : [...S.fridge, row];
+    closeModal(); render(); toast(m.id ? '수정했어요.' : '재료를 추가했어요.');
   } catch (e) {
     if (!S.modal) return;
     m.saving = false; m.error = '저장하지 못했어요. ' + e.message; renderModal();
@@ -937,6 +1090,7 @@ function renderModal() {
   if (m.kind === 'project') { renderProjectModal(); return; }
   if (m.kind === 'music') { renderMusicModal(); return; }
   if (m.kind === 'meal') { renderMealModal(); return; }
+  if (m.kind === 'fridge') { renderFridgeModal(); return; }
   const v = m.v;
   const oc = (on) => `ochip ${on ? 'on' : ''}`;
   $('#modal').innerHTML = `
@@ -975,6 +1129,7 @@ async function saveModal() {
   if (m.kind === 'project') return saveProjectModal();
   if (m.kind === 'music') return saveMusicModal();
   if (m.kind === 'meal') return saveMealModal();
+  if (m.kind === 'fridge') return saveFridgeModal();
   if (!v.title.trim()) { m.error = '할 일 제목을 입력해 주세요.'; renderModal(); return; }
   m.saving = true; m.error = ''; renderModal();
   try {
@@ -1291,7 +1446,7 @@ const VIEWS = { home: viewToday, inbox: viewInbox, project: viewProject, meal: v
 function render() {
   if (S.locked) { $('#app').innerHTML = viewLock(); return; }
   const active = document.activeElement;
-  const keepId = active && (active.id === 'mood' || active.id === 'music' || active.id === 'free-new' || (active.id || '').startsWith('p-add-') || (active.id || '').startsWith('meal-')) ? active.id : null;
+  const keepId = active && (active.id === 'mood' || active.id === 'music' || active.id === 'free-new' || (active.id || '').startsWith('p-add-') || (active.id || '').startsWith('meal-') || active.id === 'staple-new') ? active.id : null;
   $('#app').innerHTML = `<div class="shell">${viewSide()}<main class="main"><div class="wrap">${VIEWS[S.page]()}</div></main>${viewBottomNav()}</div>`;
   if (keepId) { const el = document.getElementById(keepId); if (el) { el.focus(); const n = el.value.length; try { el.setSelectionRange(n, n); } catch {} } }
 }
@@ -1349,6 +1504,17 @@ document.addEventListener('click', e => {
     case 'meal-add': addMeal(id); break;
     case 'meal-edit': openMealModal(id); break;
     case 'meal-del': deleteMeal(id); break;
+    case 'meal-tab': S.mealTab = el.dataset.val; loadPage(); break;
+    case 'fridge-filter': S.fridgeFilter = el.dataset.val; render(); break;
+    case 'fridge-new': openFridgeModal(); break;
+    case 'fridge-edit': openFridgeModal(id); break;
+    case 'fridge-used': removeFridge(id, x => `'${x.name}' 정리했어요.`); break;
+    case 'staple-edit': S.fridgeEdit = !S.fridgeEdit; render(); break;
+    case 'staple-toggle': toggleStaple(id); break;
+    case 'staple-add': addStaple(); break;
+    case 'staple-del': removeFridge(id, () => '삭제했어요.', x => `'${x.name}'을(를) 자주 쓰는 재료에서 뺄까요?`); break;
+    case 'f-place': S.modal.v.place = el.dataset.val; renderModal(); break;
+    case 'f-dkind': { const fv = S.modal.v; fv.date_kind = el.dataset.val; if (!fv.date_kind) fv.item_date = ''; else if (!fv.item_date && fv.date_kind === 'buy') fv.item_date = S.today; renderModal(); break; }
     case 'meal-open': S.mealDate = S.viewDate; S.mealKeep = true; break; // 링크 이동은 a 태그가 처리
     case 'ml-period': S.mlPeriod = el.dataset.val; S.mlAnchor = S.today; loadPage(); break;
     case 'ml-prev': S.mlAnchor = S.mlPeriod === 'week' ? addDays(weekStart(S.mlAnchor), -7) : addMonths(S.mlAnchor, -1); loadPage(); break;
@@ -1376,6 +1542,10 @@ document.addEventListener('input', e => {
   else if (S.modal && t.id === 'm-url') S.modal.v.url = t.value;
   else if (S.modal && t.id === 'm-mname') S.modal.v.name = t.value;
   else if (S.modal && t.id === 'm-mkcal') { const v = t.value.replace(/\D/g, ''); if (v !== t.value) t.value = v; S.modal.v.kcal = v; }
+  else if (S.modal && t.id === 'm-fname') S.modal.v.name = t.value;
+  else if (S.modal && t.id === 'm-fqty') S.modal.v.qty = t.value;
+  else if (S.modal && t.id === 'm-fdate') S.modal.v.item_date = t.value;
+  else if (t.id === 'staple-new') S.fridgeDraft = t.value;
   else if ((t.id || '').startsWith('meal-name-')) mealDraft(t.id.slice(10)).name = t.value;
   else if ((t.id || '').startsWith('meal-kcal-')) { const v = t.value.replace(/\D/g, ''); if (v !== t.value) t.value = v; mealDraft(t.id.slice(10)).kcal = v; }
   else if (t.id === 'free-new') S.freeNew = t.value;
@@ -1408,12 +1578,13 @@ document.addEventListener('keydown', e => {
   else if (t.id === 'free-new') { e.preventDefault(); addFree(); }
   else if ((t.id || '').startsWith('p-add-')) { e.preventDefault(); addPTask(t.id.slice(6)); }
   else if ((t.id || '').startsWith('meal-name-') || (t.id || '').startsWith('meal-kcal-')) { e.preventDefault(); addMeal(t.id.slice(10)); }
+  else if (t.id === 'staple-new') { e.preventDefault(); addStaple(); }
 });
 
 document.addEventListener('submit', async e => {
   e.preventDefault();
   const f = e.target.dataset.form;
-  if (f === 'task' || f === 'routine' || f === 'project' || f === 'music' || f === 'meal') saveModal();
+  if (f === 'task' || f === 'routine' || f === 'project' || f === 'music' || f === 'meal' || f === 'fridge') saveModal();
   if (f === 'lock') {
     const v = ($('#lock-key').value || '').trim();
     if (!v) return;
